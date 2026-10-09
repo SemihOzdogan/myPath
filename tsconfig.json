@@ -1,5 +1,15 @@
 {
   "extends": "@react-native/typescript-config",
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["**/node_modules", "**/Pods"]
+  "exclude": ["**/node_modules", "**/Pods"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "@features/*": ["src/features/*"],
+      "@shared/*": ["src/shared/*"],
+      "@theme/*": ["src/theme/*"],
+      "@navigation/*": ["src/navigation/*"]
+    }
+  }
 }
