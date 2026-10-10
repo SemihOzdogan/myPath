@@ -10,6 +10,11 @@ export function PlaceholderScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111417' },
+  screen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111417',
+  },
   text: { color: '#F6F7F9', fontSize: 16 },
 });

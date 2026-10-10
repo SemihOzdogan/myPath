@@ -1361,6 +1361,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - react-native-vector-icons-material-icons (13.1.4)
   - React-NativeModulesApple (0.87.1):
     - hermes-engine
     - React-bridging
@@ -1768,6 +1769,8 @@ PODS:
     - Yoga
   - SocketRocket (0.7.1):
     - ReactNativeDependencies
+  - TextToSpeech (4.1.1):
+    - React-Core
   - Yoga (0.0.0):
     - React-Core-prebuilt
 
@@ -1824,6 +1827,7 @@ DEPENDENCIES:
   - react-native-compass-heading (from `../node_modules/react-native-compass-heading`)
   - react-native-geolocation-service (from `../node_modules/react-native-geolocation-service`)
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
+  - "react-native-vector-icons-material-icons (from `../node_modules/@react-native-vector-icons/material-icons`)"
   - React-NativeModulesApple (from `../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios`)
   - React-networking (from `../node_modules/react-native/ReactCommon/react/networking`)
   - React-oscompat (from `../node_modules/react-native/ReactCommon/oscompat`)
@@ -1862,6 +1866,7 @@ DEPENDENCIES:
   - ReactNativeDependencies (from `../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - SocketRocket (from `build/rndeps-facades/SocketRocket`)
+  - TextToSpeech (from `../node_modules/react-native-tts`)
   - Yoga (from `build/rncore-facades/Yoga`)
 
 EXTERNAL SOURCES:
@@ -1968,6 +1973,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-geolocation-service"
   react-native-safe-area-context:
     :path: "../node_modules/react-native-safe-area-context"
+  react-native-vector-icons-material-icons:
+    :path: "../node_modules/@react-native-vector-icons/material-icons"
   React-NativeModulesApple:
     :path: "../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios"
   React-networking:
@@ -2044,6 +2051,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-screens"
   SocketRocket:
     :path: build/rndeps-facades/SocketRocket
+  TextToSpeech:
+    :path: "../node_modules/react-native-tts"
   Yoga:
     :path: build/rncore-facades/Yoga
 
@@ -2099,6 +2108,7 @@ SPEC CHECKSUMS:
   react-native-compass-heading: 4d122eeaa5e9950bb86fb597d61e6178f86961f3
   react-native-geolocation-service: 608e1da71a1ac31b4de64d9ef2815f697978c55b
   react-native-safe-area-context: f3ac7b5fa76880473a1d9cf759bacc0fab1cbdbc
+  react-native-vector-icons-material-icons: 6d1d8ea28261609bbb975b1e9c51fe54eedfafe6
   React-NativeModulesApple: 885f4cd7626a1ffe20e0dcd23ef8528f415795d3
   React-networking: 31c21d3a8ea93c859706f876d27578782b05d250
   React-oscompat: 3175a287dd7175d1a20fdce5048a4b9e11f4b915
@@ -2137,6 +2147,7 @@ SPEC CHECKSUMS:
   ReactNativeDependencies: 94c922c39e0e6150ee9ad05e2ca1946e0ef55783
   RNScreens: b156e2601e24bf64c2a7325fd033e2bcc221ef55
   SocketRocket: d57b1af80c029e12a75cd9b218287c67381e4593
+  TextToSpeech: 2b930ec3756afde499061f4f01ea895e1f75dccb
   Yoga: 58b502c52b14ad3c4468805d461fc37d275c2a42
 
 PODFILE CHECKSUM: 13a0433a4079dcb228fabe9385bdc528bcdba77e

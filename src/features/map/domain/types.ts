@@ -5,6 +5,7 @@ export type Place = {
   label: string;
   coordinate: Coordinate;
   imageUrl?: string;
+  routeOptions?: RouteOption[];
 };
 
 export type RouteSummary = {
