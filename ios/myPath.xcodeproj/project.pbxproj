@@ -14,6 +14,12 @@
 		F6103193307835A300F570A9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6103189307835A300F570A9 /* AppDelegate.swift */; };
 		F610319730783C5400F570A9 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F610319630783C5400F570A9 /* SceneDelegate.swift */; };
 		F610319C3078418C00F570A9 /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = A325628EB2E3A0FF4A048688 /* MapLibre */; };
+		A10000000000000000000010 /* NavigationActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* NavigationActivityAttributes.swift */; };
+		A10000000000000000000011 /* LiveActivityModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* LiveActivityModule.swift */; };
+		A10000000000000000000012 /* LiveActivityModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* LiveActivityModule.m */; };
+		A10000000000000000000013 /* NavigationActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* NavigationActivityAttributes.swift */; };
+		A10000000000000000000014 /* NavigationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* NavigationLiveActivity.swift */; };
+		A10000000000000000000015 /* NavigationLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* NavigationLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,7 +34,27 @@
 		F610318C307835A300F570A9 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		F610318D307835A300F570A9 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F610319630783C5400F570A9 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		A10000000000000000000001 /* NavigationLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NavigationLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000003 /* NavigationActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationActivityAttributes.swift; sourceTree = "<group>"; };
+		A10000000000000000000004 /* LiveActivityModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityModule.swift; sourceTree = "<group>"; };
+		A10000000000000000000005 /* LiveActivityModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LiveActivityModule.m; sourceTree = "<group>"; };
+		A10000000000000000000006 /* NavigationLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationLiveActivity.swift; sourceTree = "<group>"; };
+		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A10000000000000000000019 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000000015 /* NavigationLiveActivity.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		13B07F8C1A680F5B00A75B9A /* Frameworks */ = {
@@ -37,6 +63,13 @@
 			files = (
 				F610319C3078418C00F570A9 /* MapLibre in Frameworks */,
 				0C80B921A6F3F58F76C31292 /* libPods-myPath.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000017 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -63,6 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				F610318E307835A300F570A9 /* myPath */,
+				A10000000000000000000002 /* NavigationLiveActivity */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
@@ -77,6 +111,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* myPath.app */,
+				A10000000000000000000001 /* NavigationLiveActivity.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -99,8 +134,20 @@
 				F610318C307835A300F570A9 /* LaunchScreen.storyboard */,
 				F610318D307835A300F570A9 /* PrivacyInfo.xcprivacy */,
 				F610319630783C5400F570A9 /* SceneDelegate.swift */,
+				A10000000000000000000004 /* LiveActivityModule.swift */,
+				A10000000000000000000005 /* LiveActivityModule.m */,
 			);
 			path = myPath;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000002 /* NavigationLiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000003 /* NavigationActivityAttributes.swift */,
+				A10000000000000000000006 /* NavigationLiveActivity.swift */,
+				A10000000000000000000007 /* Info.plist */,
+			);
+			path = NavigationLiveActivity;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -114,6 +161,7 @@
 				13B07F871A680F5B00A75B9A /* Sources */,
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
+				A10000000000000000000019 /* Embed App Extensions */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
@@ -122,6 +170,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				A10000000000000000000021 /* PBXTargetDependency */,
 			);
 			name = myPath;
 			packageProductDependencies = (
@@ -131,7 +180,42 @@
 			productReference = 13B07F961A680F5B00A75B9A /* myPath.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000000020 /* NavigationLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000024 /* Build configuration list for PBXNativeTarget "NavigationLiveActivity" */;
+			buildPhases = (
+				A10000000000000000000016 /* Sources */,
+				A10000000000000000000017 /* Frameworks */,
+				A10000000000000000000018 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NavigationLiveActivity;
+			productName = NavigationLiveActivity;
+			productReference = A10000000000000000000001 /* NavigationLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000021 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000020 /* NavigationLiveActivity */;
+			targetProxy = A10000000000000000000022 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000022 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000020;
+			remoteInfo = NavigationLiveActivity;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		83CBB9F71A601CBA00E9B192 /* Project object */ = {
@@ -141,6 +225,9 @@
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
 						LastSwiftMigration = 1120;
+					};
+					A10000000000000000000020 = {
+						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
@@ -161,6 +248,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* myPath */,
+				A10000000000000000000020 /* NavigationLiveActivity */,
 			);
 		};
 /* End PBXProject section */
@@ -173,6 +261,13 @@
 				F610318F307835A300F570A9 /* PrivacyInfo.xcprivacy in Resources */,
 				F6103190307835A300F570A9 /* Images.xcassets in Resources */,
 				F6103191307835A300F570A9 /* LaunchScreen.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000018 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -277,8 +372,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000010 /* NavigationActivityAttributes.swift in Sources */,
+				A10000000000000000000011 /* LiveActivityModule.swift in Sources */,
+				A10000000000000000000012 /* LiveActivityModule.m in Sources */,
 				F6103193307835A300F570A9 /* AppDelegate.swift in Sources */,
 				F610319730783C5400F570A9 /* SceneDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000016 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000013 /* NavigationActivityAttributes.swift in Sources */,
+				A10000000000000000000014 /* NavigationLiveActivity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -295,7 +402,7 @@
 				DEVELOPMENT_TEAM = FACGCHLT4W;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = myPath/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -325,7 +432,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = FACGCHLT4W;
 				INFOPLIST_FILE = myPath/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -501,6 +608,40 @@
 			};
 			name = Release;
 		};
+		A10000000000000000000023 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FACGCHLT4W;
+				INFOPLIST_FILE = NavigationLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.myPath.NavigationLiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000025 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FACGCHLT4W;
+				INFOPLIST_FILE = NavigationLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.myPath.NavigationLiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -509,6 +650,15 @@
 			buildConfigurations = (
 				13B07F941A680F5B00A75B9A /* Debug */,
 				13B07F951A680F5B00A75B9A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000024 /* Build configuration list for PBXNativeTarget "NavigationLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000023 /* Debug */,
+				A10000000000000000000025 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

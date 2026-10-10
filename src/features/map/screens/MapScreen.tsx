@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -27,6 +28,7 @@ import type {
   Place,
   RouteOption,
   RouteSummary,
+  TravelMode,
 } from '../domain/types';
 import {
   calculateRoutes,
@@ -40,6 +42,11 @@ import {
   speakNavigationStart,
   stopNavigationSpeech,
 } from '../services/navigationSpeech';
+import {
+  endNavigationLiveActivity,
+  startNavigationLiveActivity,
+  updateNavigationLiveActivity,
+} from '../services/navigationLiveActivity';
 import {
   bearingBetween,
   coordinateAtRouteOffset,
@@ -76,6 +83,14 @@ const DEMO_DRIVE_STEP_COUNT = 80;
 const NAVIGATION_ZOOM = 19;
 const NAVIGATION_PITCH = 50;
 
+function arrivalTime(seconds: number) {
+  const time = new Date(Date.now() + Math.max(0, seconds) * 1_000);
+  return `Varış ${time.toLocaleTimeString('tr-TR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
+}
+
 export function MapScreen() {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<CameraRef>(null);
@@ -83,7 +98,10 @@ export function MapScreen() {
   const lastNavigationPositionRef = useRef<Coordinate>(ISTANBUL);
   const compassHeadingRef = useRef<number | null>(null);
   const searchRequestRef = useRef(0);
+  const routePreviewRequestRef = useRef(0);
   const spokenInstructionRef = useRef<string | null>(null);
+  const liveActivityUpdateRef = useRef<string | null>(null);
+  const liveActivityEndHandlerRef = useRef<() => void>(() => undefined);
   const demoDriveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigationZoomRef = useRef(NAVIGATION_ZOOM);
   const [origin, setOrigin] = useState<Coordinate>(ISTANBUL);
@@ -95,7 +113,10 @@ export function MapScreen() {
   const [isSearching, setIsSearching] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
+  const [routePreview, setRoutePreview] = useState<RouteSummary | null>(null);
+  const [isRoutePreviewLoading, setIsRoutePreviewLoading] = useState(false);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [travelMode, setTravelMode] = useState<TravelMode>('car');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [hasArrived, setHasArrived] = useState(false);
@@ -136,22 +157,7 @@ export function MapScreen() {
       setIsSearching(true);
       try {
         const places = await searchPlaces(TOMTOM_API_KEY, normalized, origin);
-        const placesWithRoutes = await Promise.all(
-          places.map(async place => {
-            try {
-              const matchedRouteOptions = await calculateRoutes(
-                TOMTOM_API_KEY,
-                origin,
-                place.coordinate,
-              );
-              return { ...place, routeOptions: matchedRouteOptions };
-            } catch {
-              return place;
-            }
-          }),
-        );
-        if (requestId === searchRequestRef.current)
-          setResults(placesWithRoutes);
+        if (requestId === searchRequestRef.current) setResults(places);
       } catch (error) {
         Alert.alert(
           error instanceof Error && error.message === 'API_KEY_MISSING'
@@ -173,6 +179,7 @@ export function MapScreen() {
   useEffect(
     () => () => {
       stopNavigationSpeech();
+      endNavigationLiveActivity().catch(() => undefined);
       if (demoDriveTimerRef.current) clearInterval(demoDriveTimerRef.current);
     },
     [],
@@ -221,12 +228,74 @@ export function MapScreen() {
   }, [hasArrived, isNavigating, isVoiceGuidanceEnabled, remainingDistance]);
 
   useEffect(() => {
+    if (!isNavigating || !summary || !destination) return;
+
+    const instruction = hasArrived
+      ? 'Hedefe ulaştınız'
+      : navigationInstruction?.message ?? 'Rotanızı takip edin';
+    const distanceStep = travelMode === 'pedestrian' ? 10 : 50;
+    const roundedDistance =
+      Math.round(remainingDistance / distanceStep) * distanceStep;
+    const progress = Math.min(1, Math.max(0, routeProgress / 100));
+    const eta = arrivalTime(summary.duration * (1 - progress));
+    const updateKey = `${instruction}-${roundedDistance}-${hasArrived}`;
+    if (liveActivityUpdateRef.current === updateKey) return;
+
+    liveActivityUpdateRef.current = updateKey;
+    updateNavigationLiveActivity({
+      destination: destination.title,
+      instruction,
+      traveledDistance: formatDistance(traveledDistance),
+      remainingDistance: formatDistance(roundedDistance),
+      remainingTime: formatDuration(summary.duration * (1 - progress)),
+      eta,
+      progress,
+      travelMode,
+      hasArrived,
+    }).catch(() => undefined);
+  }, [
+    destination,
+    hasArrived,
+    isNavigating,
+    navigationInstruction,
+    remainingDistance,
+    routeProgress,
+    summary,
+    travelMode,
+    traveledDistance,
+  ]);
+
+  useEffect(() => {
     if (!isSearchOpen || query.trim().length < 3) return undefined;
     const timeout = setTimeout(() => {
       submitSearch().catch(() => undefined);
     }, 350);
     return () => clearTimeout(timeout);
   }, [isSearchOpen, query, submitSearch]);
+
+  useEffect(() => {
+    if (!destination || routeOptions.length > 0) return undefined;
+
+    const requestId = ++routePreviewRequestRef.current;
+    setRoutePreview(null);
+    setIsRoutePreviewLoading(true);
+    calculateRoutes(TOMTOM_API_KEY, origin, destination.coordinate, travelMode)
+      .then(options => {
+        if (requestId === routePreviewRequestRef.current)
+          setRoutePreview(options[0]?.summary ?? null);
+      })
+      .catch(() => {
+        if (requestId === routePreviewRequestRef.current) setRoutePreview(null);
+      })
+      .finally(() => {
+        if (requestId === routePreviewRequestRef.current)
+          setIsRoutePreviewLoading(false);
+      });
+
+    return () => {
+      routePreviewRequestRef.current += 1;
+    };
+  }, [destination, origin, routeOptions.length, travelMode]);
 
   useEffect(() => {
     if (!isNavigating || hasArrived) return undefined;
@@ -343,7 +412,10 @@ export function MapScreen() {
 
   function clearRoute() {
     stopDemoDrive();
+    routePreviewRequestRef.current += 1;
     setRouteOptions([]);
+    setRoutePreview(null);
+    setIsRoutePreviewLoading(false);
     setSelectedRouteIndex(0);
     setIsNavigating(false);
     setHasArrived(false);
@@ -374,6 +446,7 @@ export function MapScreen() {
     setDestination(place);
     setQuery(place.title);
     setResults([]);
+    setRoutePreview(null);
     clearRoute();
     setIsSearchOpen(false);
     cameraRef.current?.flyTo({
@@ -385,9 +458,12 @@ export function MapScreen() {
   async function buildRoute() {
     if (!destination) return;
     try {
-      const options =
-        destination.routeOptions ??
-        (await calculateRoutes(TOMTOM_API_KEY, origin, destination.coordinate));
+      const options = await calculateRoutes(
+        TOMTOM_API_KEY,
+        origin,
+        destination.coordinate,
+        travelMode,
+      );
       if (!options.length) throw new Error('ROUTE_FAILED');
       setRouteOptions(options);
       setSelectedRouteIndex(0);
@@ -398,6 +474,11 @@ export function MapScreen() {
         'TomTom anahtarını, kotanı ve internet bağlantını kontrol et.',
       );
     }
+  }
+  function changeTravelMode(mode: TravelMode) {
+    if (mode === travelMode) return;
+    setTravelMode(mode);
+    clearRoute();
   }
   function fitRoute(option: RouteOption) {
     const longitudes = option.coordinates.map(point => point[0]);
@@ -434,6 +515,23 @@ export function MapScreen() {
     spokenInstructionRef.current = null;
     setHasArrived(false);
     setIsNavigating(true);
+    liveActivityUpdateRef.current = null;
+    if (destination && summary) {
+      startNavigationLiveActivity({
+        destination: destination.title,
+        instruction: route.instructions[0]?.message ?? 'Rotanızı takip edin',
+        traveledDistance: formatDistance(0),
+        remainingDistance: formatDistance(summary.length),
+        remainingTime: formatDuration(summary.duration),
+        eta: arrivalTime(summary.duration),
+        progress: 0,
+        travelMode,
+        hasArrived: false,
+        routeCoordinates: route.coordinates,
+        routeLengthMeters: summary.length,
+        durationSeconds: summary.duration,
+      }).catch(() => undefined);
+    }
     if (isVoiceGuidanceEnabled) {
       enableNavigationSpeech();
       speakNavigationStart().catch(() => undefined);
@@ -459,6 +557,8 @@ export function MapScreen() {
     setResults([]);
     setIsSearchOpen(false);
     stopNavigationSpeech();
+    liveActivityUpdateRef.current = null;
+    endNavigationLiveActivity().catch(() => undefined);
     cameraRef.current?.flyTo({
       center: navigationPosition,
       zoom: 16,
@@ -576,6 +676,20 @@ export function MapScreen() {
     closeSearch();
   }
 
+  liveActivityEndHandlerRef.current = stopNavigation;
+
+  useEffect(() => {
+    const handleUrl = ({ url }: { url: string }) => {
+      if (url.startsWith('mypath://navigation/end'))
+        liveActivityEndHandlerRef.current();
+    };
+    const subscription = Linking.addEventListener('url', handleUrl);
+    Linking.getInitialURL().then(url => {
+      if (url) handleUrl({ url });
+    });
+    return () => subscription.remove();
+  }, []);
+
   return (
     <View style={styles.screen}>
       <MapCanvas
@@ -588,6 +702,7 @@ export function MapScreen() {
         selectedRouteIndex={selectedRouteIndex}
         isNavigating={isNavigating}
         hasArrived={hasArrived}
+        travelMode={travelMode}
         navigationPosition={navigationPosition}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
@@ -635,6 +750,7 @@ export function MapScreen() {
                 ? 'location-on'
                 : maneuverIcon(navigationInstruction ?? null)
             }
+            travelMode={travelMode}
             top={insets.top + 16}
           />
         )}
@@ -689,6 +805,7 @@ export function MapScreen() {
             remainingDistance={remainingDistance}
             routeProgress={routeProgress}
             hasArrived={hasArrived}
+            travelMode={travelMode}
           />
         ) : destination ? (
           summary ? (
@@ -696,15 +813,21 @@ export function MapScreen() {
               destination={destination}
               options={routeOptions}
               selectedIndex={selectedRouteIndex}
+              travelMode={travelMode}
               bottomInset={insets.bottom}
               onSelect={selectRoute}
               onStart={startNavigation}
               onClose={clearRoute}
+              onTravelModeChange={changeTravelMode}
             />
           ) : (
             <PlacePanel
               place={destination}
+              travelMode={travelMode}
+              routePreview={routePreview}
+              isRoutePreviewLoading={isRoutePreviewLoading}
               bottomInset={insets.bottom}
+              onTravelModeChange={changeTravelMode}
               onRoute={() => {
                 buildRoute().catch(() => undefined);
               }}
@@ -872,15 +995,21 @@ function SearchPanel({
 }
 function PlacePanel({
   place,
+  travelMode,
+  routePreview,
+  isRoutePreviewLoading,
   bottomInset,
   onRoute,
+  onTravelModeChange,
 }: {
   place: Place;
+  travelMode: TravelMode;
+  routePreview: RouteSummary | null;
+  isRoutePreviewLoading: boolean;
   bottomInset: number;
   onRoute: () => void;
+  onTravelModeChange: (mode: TravelMode) => void;
 }) {
-  const routePreview = place.routeOptions?.[0]?.summary;
-
   return (
     <DraggableSheet
       style={[
@@ -907,6 +1036,7 @@ function PlacePanel({
           </Text>
         </View>
       </View>
+      <TravelModePicker value={travelMode} onChange={onTravelModeChange} />
       <View style={styles.routeCreationInfoCard}>
         <View style={styles.routeCreationInfoItem}>
           <MaterialIcons name="route" size={22} color={colors.primary} />
@@ -915,7 +1045,9 @@ function PlacePanel({
             <Text style={styles.routeCreationInfoValue}>
               {routePreview
                 ? formatDistance(routePreview.length)
-                : 'Rota hesaplanacak'}
+                : isRoutePreviewLoading
+                  ? 'Hesaplanıyor...'
+                  : 'Hesaplanamadı'}
             </Text>
           </View>
         </View>
@@ -927,13 +1059,17 @@ function PlacePanel({
             <Text style={styles.routeCreationInfoValue}>
               {routePreview
                 ? formatDuration(routePreview.duration)
-                : 'En hızlı seçenek bulunacak'}
+                : isRoutePreviewLoading
+                  ? 'Hesaplanıyor...'
+                  : 'Hesaplanamadı'}
             </Text>
           </View>
         </View>
       </View>
       <Text style={styles.routeCreationHint}>
-        Rota seçeneklerini karşılaştırıp sana en uygun yolu seçebilirsin.
+        {travelMode === 'car'
+          ? 'Rota seçeneklerini karşılaştırıp sana en uygun yolu seçebilirsin.'
+          : 'Yaya yollarını kullanarak en uygun rotayı bulabilirsin.'}
       </Text>
       <Pressable style={styles.routeCreationButton} onPress={onRoute}>
         <MaterialIcons name="alt-route" size={22} color={colors.white} />
@@ -946,18 +1082,22 @@ function RoutePanel({
   destination,
   options,
   selectedIndex,
+  travelMode,
   bottomInset,
   onSelect,
   onStart,
   onClose,
+  onTravelModeChange,
 }: {
   destination: Place;
   options: RouteOption[];
   selectedIndex: number;
+  travelMode: TravelMode;
   bottomInset: number;
   onSelect: (option: RouteOption, index: number) => void;
   onStart: () => void;
   onClose: () => void;
+  onTravelModeChange: (mode: TravelMode) => void;
 }) {
   return (
     <DraggableSheet
@@ -973,6 +1113,7 @@ function RoutePanel({
       <Text numberOfLines={1} style={styles.routeTo}>
         {destination.title}
       </Text>
+      <TravelModePicker value={travelMode} onChange={onTravelModeChange} />
       <Text style={styles.routePickerLabel}>ROTA SEÇENEKLERİ</Text>
       <View style={styles.routeOptions}>
         {options.map((option, index) => {
@@ -1042,7 +1183,7 @@ function RoutePanel({
                 >
                   {formatDistance(option.summary.length)}
                 </Text>
-                {delay > 0 && (
+                {travelMode === 'car' && delay > 0 && (
                   <Text
                     style={[
                       styles.delayText,
@@ -1053,7 +1194,7 @@ function RoutePanel({
                   </Text>
                 )}
               </View>
-              {Boolean(
+              {travelMode === 'car' && Boolean(
                 option.summary.tollRoadLength || option.summary.hasTollRoad,
               ) && (
                 <Text
@@ -1072,6 +1213,64 @@ function RoutePanel({
     </DraggableSheet>
   );
 }
+function TravelModePicker({
+  value,
+  onChange,
+}: {
+  value: TravelMode;
+  onChange: (mode: TravelMode) => void;
+}) {
+  return (
+    <View accessibilityRole="radiogroup" style={styles.travelModePicker}>
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityState={{ selected: value === 'car' }}
+        style={[
+          styles.travelModeOption,
+          value === 'car' && styles.travelModeOptionSelected,
+        ]}
+        onPress={() => onChange('car')}
+      >
+        <MaterialIcons
+          name="directions-car"
+          size={19}
+          color={value === 'car' ? colors.white : colors.textMuted}
+        />
+        <Text
+          style={[
+            styles.travelModeText,
+            value === 'car' && styles.travelModeTextSelected,
+          ]}
+        >
+          Araba
+        </Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityState={{ selected: value === 'pedestrian' }}
+        style={[
+          styles.travelModeOption,
+          value === 'pedestrian' && styles.travelModeOptionSelected,
+        ]}
+        onPress={() => onChange('pedestrian')}
+      >
+        <MaterialIcons
+          name="directions-walk"
+          size={19}
+          color={value === 'pedestrian' ? colors.white : colors.textMuted}
+        />
+        <Text
+          style={[
+            styles.travelModeText,
+            value === 'pedestrian' && styles.travelModeTextSelected,
+          ]}
+        >
+          Yürüme
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
 function NavigationPanel({
   summary,
   message,
@@ -1085,6 +1284,7 @@ function NavigationPanel({
   remainingDistance,
   routeProgress,
   hasArrived,
+  travelMode,
 }: {
   summary: RouteSummary;
   message?: string;
@@ -1098,7 +1298,9 @@ function NavigationPanel({
   remainingDistance: number;
   routeProgress: number;
   hasArrived: boolean;
+  travelMode: TravelMode;
 }) {
+  const isWalking = travelMode === 'pedestrian';
   const progressFillStyle = useMemo(
     () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
     [routeProgress],
@@ -1108,12 +1310,21 @@ function NavigationPanel({
     <View
       style={[
         styles.navigationPanel,
+        isWalking && styles.walkingNavigationPanel,
         modalLayer,
         { marginBottom: bottomInset + 12 },
       ]}
     >
       <View style={styles.navigationHeader}>
         <View style={styles.navigationContent}>
+          {isWalking && (
+            <View style={styles.walkingNavigationBadge}>
+              <MaterialIcons name="directions-walk" size={15} color="#D6FFF0" />
+              <Text style={styles.walkingNavigationBadgeText}>
+                YAYA NAVİGASYONU
+              </Text>
+            </View>
+          )}
           <Text style={styles.navMetric}>
             {formatDistance(summary.length)} ·{' '}
             {formatDuration(summary.duration)}
@@ -1179,15 +1390,24 @@ function ManeuverCard({
   distance,
   message,
   iconName,
+  travelMode,
   top,
 }: {
   distance: number;
   message: string;
   iconName: ManeuverIconName;
+  travelMode: TravelMode;
   top: number;
 }) {
+  const isWalking = travelMode === 'pedestrian';
   return (
-    <View style={[styles.maneuverCard, { top }]}>
+    <View
+      style={[
+        styles.maneuverCard,
+        isWalking && styles.walkingManeuverCard,
+        { top },
+      ]}
+    >
       <MaterialIcons
         name={iconName}
         size={43}
@@ -1239,6 +1459,7 @@ const styles = StyleSheet.create({
     gap: 10,
     alignItems: 'center',
   },
+  walkingManeuverCard: { backgroundColor: '#0E8062' },
   maneuverIcon: { width: 43, textAlign: 'center' },
   maneuverDistance: { fontSize: 28, color: colors.white, fontWeight: '800' },
   maneuverStreet: {
@@ -1387,6 +1608,27 @@ const styles = StyleSheet.create({
   },
   placeTitle: { color: colors.text, fontSize: 24, fontWeight: '800' },
   placeLabel: { color: colors.textMuted, marginTop: 3 },
+  travelModePicker: {
+    flexDirection: 'row',
+    alignSelf: 'center',
+    marginTop: 18,
+    padding: 4,
+    gap: 4,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceDark,
+  },
+  travelModeOption: {
+    minWidth: 116,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 10,
+    paddingVertical: 10,
+  },
+  travelModeOptionSelected: { backgroundColor: colors.primary },
+  travelModeText: { color: colors.textMuted, fontSize: 14, fontWeight: '700' },
+  travelModeTextSelected: { color: colors.white },
   routeCreationInfoCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1530,11 +1772,29 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 18,
   },
+  walkingNavigationPanel: { backgroundColor: '#075741' },
   navigationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   navigationContent: { flex: 1, minWidth: 0 },
+  walkingNavigationBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF20',
+  },
+  walkingNavigationBadgeText: {
+    color: '#D6FFF0',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
   navMetric: { color: colors.white, fontWeight: '800', fontSize: 17 },
   navInstruction: { color: colors.textMuted, marginTop: 4 },
   progressLabels: {

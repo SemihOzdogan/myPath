@@ -1,4 +1,9 @@
-import type { Coordinate, Place, RouteOption } from '../domain/types';
+import type {
+  Coordinate,
+  Place,
+  RouteOption,
+  TravelMode,
+} from '../domain/types';
 
 type TomTomSearchResult = {
   poi?: { name?: string };
@@ -58,21 +63,24 @@ export async function calculateRoutes(
   apiKey: string,
   origin: Coordinate,
   destination: Coordinate,
+  travelMode: TravelMode = 'car',
 ): Promise<RouteOption[]> {
   requireKey(apiKey);
   const url = new URL(
     `https://api.tomtom.com/routing/1/calculateRoute/${origin[1]},${origin[0]}:${destination[1]},${destination[0]}/json`,
   );
-  [
+  const parameters = [
     ['key', apiKey.trim()],
-    ['traffic', 'true'],
-    ['travelMode', 'car'],
+    ['travelMode', travelMode],
     ['routeType', 'fastest'],
     ['maxAlternatives', '2'],
     ['instructionsType', 'text'],
-    ['sectionType', 'tollRoad'],
     ['language', 'tr-TR'],
-  ].forEach(([key, value]) => url.searchParams.set(key, value));
+  ];
+  if (travelMode === 'car') {
+    parameters.push(['traffic', 'true'], ['sectionType', 'tollRoad']);
+  }
+  parameters.forEach(([key, value]) => url.searchParams.set(key, value));
   const response = await fetch(url.toString());
   if (!response.ok) throw new Error('ROUTE_FAILED');
   const data = (await response.json()) as { routes?: TomTomRoute[] };

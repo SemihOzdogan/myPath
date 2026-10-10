@@ -1,5 +1,7 @@
 export type Coordinate = [longitude: number, latitude: number];
 
+export type TravelMode = 'car' | 'pedestrian';
+
 export type Place = {
   title: string;
   label: string;
