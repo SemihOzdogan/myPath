@@ -17,7 +17,7 @@ import type {
   RouteOption,
   TravelMode,
 } from '../domain/types';
-import { routeToGeoJson } from '../utils/geo';
+import { routeToGeoJson, splitRouteAtOffset } from '../utils/geo';
 
 const navigationArrow = require('../../../../assets/navigation-arrow.png');
 const destinationPin = require('../../../../assets/destination-pin.png');
@@ -37,6 +37,7 @@ type Props = {
   hasArrived: boolean;
   travelMode: TravelMode;
   navigationPosition: Coordinate;
+  traveledDistance: number;
   onMapPress: (event: unknown) => void;
   onRegionDidChange: (zoom: number) => void;
   onSelectRoute: (option: RouteOption, index: number) => void;
@@ -54,6 +55,7 @@ export function MapCanvas({
   hasArrived,
   travelMode,
   navigationPosition,
+  traveledDistance,
   onMapPress,
   onRegionDidChange,
   onSelectRoute,
@@ -62,6 +64,18 @@ export function MapCanvas({
   // Keep source identities stable while the navigation marker moves. Replacing a
   // GeoJSON source on each GPS update can make the base-map labels flicker.
   const routeGeoJson = useMemo(() => routeToGeoJson(route), [route]);
+  const routeSegments = useMemo(
+    () => splitRouteAtOffset(route, traveledDistance),
+    [route, traveledDistance],
+  );
+  const passedRouteGeoJson = useMemo(
+    () => routeToGeoJson(routeSegments.passed),
+    [routeSegments.passed],
+  );
+  const remainingRouteGeoJson = useMemo(
+    () => routeToGeoJson(routeSegments.remaining),
+    [routeSegments.remaining],
+  );
   const alternativeRouteGeoJson = useMemo(
     () => options.map(option => routeToGeoJson(option.coordinates)),
     [options],
@@ -105,7 +119,7 @@ export function MapCanvas({
               </GeoJSONSource>
             ),
         )}
-      {route.length > 1 && (
+      {route.length > 1 && !isNavigating && (
         <GeoJSONSource id="route-source" data={routeGeoJson}>
           <Layer
             id="route-outline"
@@ -129,6 +143,55 @@ export function MapCanvas({
             layout={routeLineLayout}
           />
         </GeoJSONSource>
+      )}
+      {route.length > 1 && isNavigating && (
+        <>
+          <GeoJSONSource id="passed-route-source" data={passedRouteGeoJson}>
+            <Layer
+              id="passed-route-outline"
+              type="line"
+              paint={{
+                'line-color': '#FFFFFF',
+                'line-width': 11,
+                'line-opacity': 0.9,
+              }}
+              layout={routeLineLayout}
+            />
+            <Layer
+              id="passed-route-line"
+              type="line"
+              paint={{
+                'line-color': '#A7B0C0',
+                'line-width': 7,
+                'line-opacity': 0.9,
+              }}
+              layout={routeLineLayout}
+            />
+          </GeoJSONSource>
+          <GeoJSONSource id="remaining-route-source" data={remainingRouteGeoJson}>
+            <Layer
+              id="remaining-route-outline"
+              type="line"
+              paint={{
+                'line-color': isWalking ? '#D6FFF0' : '#FFFFFF',
+                'line-width': 11,
+                'line-opacity': 0.95,
+              }}
+              layout={routeLineLayout}
+            />
+            <Layer
+              id="remaining-route-line"
+              type="line"
+              paint={{
+                'line-color': isWalking ? '#16A879' : '#1667FF',
+                'line-width': 7,
+                'line-opacity': 0.95,
+                ...(isWalking ? { 'line-dasharray': [1.2, 1.4] } : {}),
+              }}
+              layout={routeLineLayout}
+            />
+          </GeoJSONSource>
+        </>
       )}
       {isNavigating ? (
         <Marker id="user-location" lngLat={navigationPosition} anchor="center">

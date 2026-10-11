@@ -17,6 +17,8 @@
 		A10000000000000000000010 /* NavigationActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* NavigationActivityAttributes.swift */; };
 		A10000000000000000000011 /* LiveActivityModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* LiveActivityModule.swift */; };
 		A10000000000000000000012 /* LiveActivityModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* LiveActivityModule.m */; };
+		B20000000000000000000001 /* NavigationSpeechModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* NavigationSpeechModule.swift */; };
+		B20000000000000000000002 /* NavigationSpeechModule.m in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* NavigationSpeechModule.m */; };
 		A10000000000000000000013 /* NavigationActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* NavigationActivityAttributes.swift */; };
 		A10000000000000000000014 /* NavigationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* NavigationLiveActivity.swift */; };
 		A10000000000000000000015 /* NavigationLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* NavigationLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -38,6 +40,8 @@
 		A10000000000000000000003 /* NavigationActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationActivityAttributes.swift; sourceTree = "<group>"; };
 		A10000000000000000000004 /* LiveActivityModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityModule.swift; sourceTree = "<group>"; };
 		A10000000000000000000005 /* LiveActivityModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LiveActivityModule.m; sourceTree = "<group>"; };
+		B20000000000000000000003 /* NavigationSpeechModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationSpeechModule.swift; sourceTree = "<group>"; };
+		B20000000000000000000004 /* NavigationSpeechModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NavigationSpeechModule.m; sourceTree = "<group>"; };
 		A10000000000000000000006 /* NavigationLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationLiveActivity.swift; sourceTree = "<group>"; };
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -136,6 +140,8 @@
 				F610319630783C5400F570A9 /* SceneDelegate.swift */,
 				A10000000000000000000004 /* LiveActivityModule.swift */,
 				A10000000000000000000005 /* LiveActivityModule.m */,
+				B20000000000000000000003 /* NavigationSpeechModule.swift */,
+				B20000000000000000000004 /* NavigationSpeechModule.m */,
 			);
 			path = myPath;
 			sourceTree = "<group>";
@@ -375,6 +381,8 @@
 				A10000000000000000000010 /* NavigationActivityAttributes.swift in Sources */,
 				A10000000000000000000011 /* LiveActivityModule.swift in Sources */,
 				A10000000000000000000012 /* LiveActivityModule.m in Sources */,
+				B20000000000000000000001 /* NavigationSpeechModule.swift in Sources */,
+				B20000000000000000000002 /* NavigationSpeechModule.m in Sources */,
 				F6103193307835A300F570A9 /* AppDelegate.swift in Sources */,
 				F610319730783C5400F570A9 /* SceneDelegate.swift in Sources */,
 			);

@@ -50,11 +50,11 @@ import {
 import {
   bearingBetween,
   coordinateAtRouteOffset,
+  distanceToRouteInMeters,
   formatDistance,
   formatDuration,
   maneuverIcon,
   routeProgressInMeters,
-  snapToRoute,
 } from '../utils/geo';
 import type { ManeuverIconName } from '../utils/geo';
 
@@ -82,6 +82,11 @@ const DEMO_DRIVE_INTERVAL = 600;
 const DEMO_DRIVE_STEP_COUNT = 80;
 const NAVIGATION_ZOOM = 19;
 const NAVIGATION_PITCH = 50;
+// A short threshold makes a turn into a different street feel immediate while
+// still filtering normal GPS drift with the reported accuracy below.
+const REROUTE_DISTANCE_METERS = { car: 30, pedestrian: 20 } as const;
+const REROUTE_COOLDOWN_MS = 12_000;
+const DEMO_REROUTE_OFFSET_METERS = 60;
 
 function arrivalTime(seconds: number) {
   const time = new Date(Date.now() + Math.max(0, seconds) * 1_000);
@@ -104,6 +109,10 @@ export function MapScreen() {
   const liveActivityEndHandlerRef = useRef<() => void>(() => undefined);
   const demoDriveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigationZoomRef = useRef(NAVIGATION_ZOOM);
+  const rerouteRequestRef = useRef(0);
+  const lastRerouteAtRef = useRef(0);
+  const navigationSessionRef = useRef(0);
+  const isDemoPositionOverrideRef = useRef(false);
   const [origin, setOrigin] = useState<Coordinate>(ISTANBUL);
   const [destination, setDestination] = useState<Place | null>(null);
   const [navigationPosition, setNavigationPosition] =
@@ -122,6 +131,7 @@ export function MapScreen() {
   const [hasArrived, setHasArrived] = useState(false);
   const [isVoiceGuidanceEnabled, setIsVoiceGuidanceEnabled] = useState(true);
   const [isDemoDriving, setIsDemoDriving] = useState(false);
+  const [isDemoRerouting, setIsDemoRerouting] = useState(false);
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
@@ -297,18 +307,69 @@ export function MapScreen() {
     };
   }, [destination, origin, routeOptions.length, travelMode]);
 
+  const rerouteFrom = useCallback(
+    async (coordinate: Coordinate) => {
+      if (!destination || !isNavigating) return;
+
+      const now = Date.now();
+      if (now - lastRerouteAtRef.current < REROUTE_COOLDOWN_MS) return;
+
+      lastRerouteAtRef.current = now;
+      const requestId = ++rerouteRequestRef.current;
+      const sessionId = navigationSessionRef.current;
+      try {
+        const options = await calculateRoutes(
+          TOMTOM_API_KEY,
+          coordinate,
+          destination.coordinate,
+          travelMode,
+        );
+        if (!options.length) throw new Error('ROUTE_FAILED');
+        if (
+          requestId !== rerouteRequestRef.current ||
+          sessionId !== navigationSessionRef.current
+        )
+          return;
+
+        spokenInstructionRef.current = null;
+        setRouteOptions(options);
+        setSelectedRouteIndex(0);
+        return options;
+      } catch {
+        // Keep the last valid route visible when a transient request fails.
+      }
+    },
+    [destination, isNavigating, travelMode],
+  );
+
   useEffect(() => {
-    if (!isNavigating || hasArrived) return undefined;
+    // The development demo supplies its own positions. Do not let the device's
+    // real GPS overwrite a simulated deviation or the new simulated route.
+    if (
+      !isNavigating ||
+      hasArrived ||
+      isDemoDriving ||
+      isDemoRerouting
+    )
+      return undefined;
     const watchId = Geolocation.watchPosition(
       position => {
+        if (isDemoPositionOverrideRef.current) return;
         const coordinate: Coordinate = [
           position.coords.longitude,
           position.coords.latitude,
         ];
-        const routeCoordinate = route
-          ? snapToRoute(coordinate, route.coordinates)
-          : coordinate;
-        setOrigin(routeCoordinate);
+        const distanceFromRoute = route
+          ? distanceToRouteInMeters(coordinate, route.coordinates)
+          : 0;
+        const rerouteThreshold = Math.max(
+          REROUTE_DISTANCE_METERS[travelMode],
+          position.coords.accuracy || 0,
+        );
+        if (route && distanceFromRoute > rerouteThreshold)
+          rerouteFrom(coordinate).catch(() => undefined);
+
+        setOrigin(coordinate);
         const reportedHeading = position.coords.heading;
         const heading =
           compassHeadingRef.current ??
@@ -316,12 +377,12 @@ export function MapScreen() {
             ? reportedHeading
             : bearingBetween(
                 lastNavigationPositionRef.current,
-                routeCoordinate,
+                coordinate,
               ));
-        lastNavigationPositionRef.current = routeCoordinate;
-        setNavigationPosition(routeCoordinate);
+        lastNavigationPositionRef.current = coordinate;
+        setNavigationPosition(coordinate);
         cameraRef.current?.flyTo({
-          center: routeCoordinate,
+          center: coordinate,
           zoom: navigationZoomRef.current,
           pitch: NAVIGATION_PITCH,
           bearing: heading,
@@ -331,13 +392,21 @@ export function MapScreen() {
       () => undefined,
       {
         enableHighAccuracy: true,
-        distanceFilter: 5,
-        interval: 4_000,
-        fastestInterval: 2_000,
+        distanceFilter: 3,
+        interval: 2_000,
+        fastestInterval: 1_000,
       },
     );
     return () => Geolocation.clearWatch(watchId);
-  }, [hasArrived, isNavigating, route]);
+  }, [
+    hasArrived,
+    isDemoDriving,
+    isDemoRerouting,
+    isNavigating,
+    rerouteFrom,
+    route,
+    travelMode,
+  ]);
 
   useEffect(() => {
     if (!isNavigating || hasArrived) return undefined;
@@ -413,6 +482,7 @@ export function MapScreen() {
   function clearRoute() {
     stopDemoDrive();
     routePreviewRequestRef.current += 1;
+    rerouteRequestRef.current += 1;
     setRouteOptions([]);
     setRoutePreview(null);
     setIsRoutePreviewLoading(false);
@@ -509,6 +579,9 @@ export function MapScreen() {
         ? bearingBetween(route.coordinates[0], route.coordinates[1])
         : 0;
     compassHeadingRef.current = null;
+    navigationSessionRef.current += 1;
+    rerouteRequestRef.current += 1;
+    lastRerouteAtRef.current = 0;
     navigationZoomRef.current = NAVIGATION_ZOOM;
     setNavigationPosition(routeStart);
     lastNavigationPositionRef.current = routeStart;
@@ -546,6 +619,8 @@ export function MapScreen() {
   }
   function stopNavigation() {
     stopDemoDrive();
+    navigationSessionRef.current += 1;
+    rerouteRequestRef.current += 1;
     setIsNavigating(false);
     setHasArrived(false);
     spokenInstructionRef.current = null;
@@ -574,36 +649,31 @@ export function MapScreen() {
     if (nextValue) enableNavigationSpeech();
     else stopNavigationSpeech();
   }
-  function stopDemoDrive() {
+  function stopDemoDrive(shouldStopSpeech = true) {
     if (demoDriveTimerRef.current) {
       clearInterval(demoDriveTimerRef.current);
       demoDriveTimerRef.current = null;
     }
+    isDemoPositionOverrideRef.current = false;
     setIsDemoDriving(false);
-    stopNavigationSpeech();
+    if (shouldStopSpeech) stopNavigationSpeech();
   }
-  function toggleDemoDrive() {
-    if (isDemoDriving) {
-      stopDemoDrive();
-      return;
-    }
-    if (!route) return;
+  function startDemoDrive(option: RouteOption) {
+    if (option.summary.length <= 0) return;
 
-    if (route.summary.length <= 0) return;
-
-    const offsetStep = route.summary.length / DEMO_DRIVE_STEP_COUNT;
+    const offsetStep = option.summary.length / DEMO_DRIVE_STEP_COUNT;
     let offset = 0;
     const moveAlongRoute = () => {
-      if (offset > route.summary.length) {
+      if (offset > option.summary.length) {
         stopDemoDrive();
         return;
       }
 
-      const coordinate = coordinateAtRouteOffset(route.coordinates, offset);
-      const isLastDemoPosition = offset + offsetStep >= route.summary.length;
+      const coordinate = coordinateAtRouteOffset(option.coordinates, offset);
+      const isLastDemoPosition = offset + offsetStep >= option.summary.length;
       const nextCoordinate = coordinateAtRouteOffset(
-        route.coordinates,
-        Math.min(route.summary.length, offset + offsetStep),
+        option.coordinates,
+        Math.min(option.summary.length, offset + offsetStep),
       );
       setOrigin(coordinate);
       setNavigationPosition(coordinate);
@@ -622,6 +692,7 @@ export function MapScreen() {
           clearInterval(demoDriveTimerRef.current);
           demoDriveTimerRef.current = null;
         }
+        isDemoPositionOverrideRef.current = false;
         setIsDemoDriving(false);
         setHasArrived(true);
         speakNavigationArrival().catch(() => undefined);
@@ -629,12 +700,65 @@ export function MapScreen() {
     };
 
     spokenInstructionRef.current = null;
+    isDemoPositionOverrideRef.current = true;
     setIsDemoDriving(true);
     moveAlongRoute();
-    demoDriveTimerRef.current = setInterval(
-      moveAlongRoute,
-      DEMO_DRIVE_INTERVAL,
+    demoDriveTimerRef.current = setInterval(moveAlongRoute, DEMO_DRIVE_INTERVAL);
+  }
+  async function triggerDemoReroute() {
+    if (
+      !route ||
+      !summary ||
+      !destination ||
+      !isNavigating ||
+      !isDemoDriving
+    )
+      return;
+
+    // Pause simulated movement but retain its state so real GPS stays disabled.
+    if (demoDriveTimerRef.current) {
+      clearInterval(demoDriveTimerRef.current);
+      demoDriveTimerRef.current = null;
+    }
+    const routePoint = coordinateAtRouteOffset(
+      route.coordinates,
+      Math.min(summary.length, traveledDistance + 80),
     );
+    const latitudeOffset = DEMO_REROUTE_OFFSET_METERS / 110_540;
+    const longitudeOffset =
+      DEMO_REROUTE_OFFSET_METERS /
+      (111_320 * Math.max(0.2, Math.cos((routePoint[1] * Math.PI) / 180)));
+    const deviatedCoordinate: Coordinate = [
+      routePoint[0] + longitudeOffset,
+      routePoint[1] + latitudeOffset,
+    ];
+
+    lastNavigationPositionRef.current = deviatedCoordinate;
+    setOrigin(deviatedCoordinate);
+    setNavigationPosition(deviatedCoordinate);
+    cameraRef.current?.flyTo({
+      center: deviatedCoordinate,
+      zoom: navigationZoomRef.current,
+      pitch: NAVIGATION_PITCH,
+      duration: 500,
+    });
+
+    // Bypass the production cooldown so the debug control is always repeatable.
+    lastRerouteAtRef.current = 0;
+    setIsDemoRerouting(true);
+    try {
+      const options = await rerouteFrom(deviatedCoordinate);
+      if (options?.[0]) startDemoDrive(options[0]);
+    } finally {
+      setIsDemoRerouting(false);
+    }
+  }
+  function toggleDemoDrive() {
+    if (isDemoDriving) {
+      stopDemoDrive();
+      return;
+    }
+    if (route) startDemoDrive(route);
   }
   async function selectMapPlace(event: unknown) {
     if (isNavigating) return;
@@ -704,6 +828,7 @@ export function MapScreen() {
         hasArrived={hasArrived}
         travelMode={travelMode}
         navigationPosition={navigationPosition}
+        traveledDistance={traveledDistance}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
         }}
@@ -801,6 +926,10 @@ export function MapScreen() {
             onToggleVoiceGuidance={toggleVoiceGuidance}
             isDemoDriving={isDemoDriving}
             onToggleDemoDrive={toggleDemoDrive}
+            isDemoRerouting={isDemoRerouting}
+            onDemoReroute={() => {
+              triggerDemoReroute().catch(() => undefined);
+            }}
             traveledDistance={traveledDistance}
             remainingDistance={remainingDistance}
             routeProgress={routeProgress}
@@ -1280,6 +1409,8 @@ function NavigationPanel({
   onToggleVoiceGuidance,
   isDemoDriving,
   onToggleDemoDrive,
+  isDemoRerouting,
+  onDemoReroute,
   traveledDistance,
   remainingDistance,
   routeProgress,
@@ -1294,6 +1425,8 @@ function NavigationPanel({
   onToggleVoiceGuidance: () => void;
   isDemoDriving: boolean;
   onToggleDemoDrive: () => void;
+  isDemoRerouting: boolean;
+  onDemoReroute: () => void;
   traveledDistance: number;
   remainingDistance: number;
   routeProgress: number;
@@ -1354,6 +1487,18 @@ function NavigationPanel({
           <Pressable style={styles.demoDrive} onPress={onToggleDemoDrive}>
             <Text style={styles.demoDriveText}>
               {isDemoDriving ? 'Durdur' : 'Demo'}
+            </Text>
+          </Pressable>
+        )}
+        {__DEV__ && (isDemoDriving || isDemoRerouting) && (
+          <Pressable
+            accessibilityLabel="Rota sapmasını test et"
+            disabled={!isDemoDriving || isDemoRerouting}
+            style={[styles.demoReroute, isDemoRerouting && styles.demoDisabled]}
+            onPress={onDemoReroute}
+          >
+            <Text style={styles.demoDriveText}>
+              {isDemoRerouting ? 'Çiziliyor' : 'Sapma'}
             </Text>
           </Pressable>
         )}
@@ -1848,6 +1993,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  demoReroute: {
+    minWidth: 64,
+    height: 45,
+    marginRight: 8,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: '#E67817',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  demoDisabled: { opacity: 0.6 },
   demoDriveText: { color: colors.white, fontSize: 12, fontWeight: '800' },
   end: {
     width: 45,

@@ -1,4 +1,19 @@
+import { NativeModules, Platform } from 'react-native';
 import Tts from 'react-native-tts';
+
+type NavigationSpeechNativeModule = {
+  speak: (text: string) => Promise<void>;
+  stop: () => Promise<void>;
+};
+
+const nativeNavigationSpeech =
+  NativeModules.NavigationSpeechModule as
+    | NavigationSpeechNativeModule
+    | undefined;
+
+function usesNativeNavigationSpeech() {
+  return Platform.OS === 'ios' && Boolean(nativeNavigationSpeech);
+}
 
 let isInitialized = false;
 let speechGeneration = 0;
@@ -8,10 +23,23 @@ let stopTimers: ReturnType<typeof setTimeout>[] = [];
 
 function stopNativeSpeech() {
   try {
-    Promise.resolve(Tts.stop()).catch(() => undefined);
+    if (usesNativeNavigationSpeech()) {
+      Promise.resolve(nativeNavigationSpeech!.stop()).catch(() => undefined);
+    }
+    // iOS's native bridge distinguishes an omitted value from `false` here.
+    // Pass `false` explicitly to stop at the immediate boundary, rather than
+    // letting an in-progress direction finish at a word boundary.
+    Promise.resolve(Tts.stop(false)).catch(() => undefined);
   } catch {
     // Yerel ses modülü henüz yeniden derlenmiş uygulamaya eklenmemiş olabilir.
   }
+}
+
+function speakNativeNavigation(text: string) {
+  if (usesNativeNavigationSpeech()) {
+    return nativeNavigationSpeech!.speak(text);
+  }
+  return undefined;
 }
 
 function clearStopTimers() {
@@ -19,12 +47,15 @@ function clearStopTimers() {
   stopTimers = [];
 }
 
-function stopSpeechQueue() {
+function stopSpeechQueue(stoppedGeneration: number) {
   stopNativeSpeech();
   clearStopTimers();
-  stopTimers = [20, 80, 180].map(delay =>
+  // Some native engines start already-queued utterances after the first stop.
+  // Retry briefly, but only for the navigation session that was just stopped.
+  stopTimers = [40, 120, 300, 700, 1_200].map(delay =>
     setTimeout(() => {
-      if (!isSpeechEnabled) stopNativeSpeech();
+      if (!isSpeechEnabled && speechGeneration === stoppedGeneration)
+        stopNativeSpeech();
     }, delay),
   );
 }
@@ -65,6 +96,11 @@ export async function speakNavigationStart() {
   if (!isSpeechEnabled) return;
   const generation = speechGeneration;
   try {
+    const nativeSpeech = speakNativeNavigation('Navigasyon başlatıldı.');
+    if (nativeSpeech) {
+      await nativeSpeech;
+      return;
+    }
     await initializeSpeech();
     if (!isSpeechEnabled || generation !== speechGeneration) return;
     Tts.speak('Navigasyon başlatıldı.');
@@ -80,6 +116,11 @@ export async function speakNavigationInstruction(
   if (!isSpeechEnabled) return;
   const generation = speechGeneration;
   try {
+    const nativeSpeech = speakNativeNavigation(`${distance} sonra, ${message}`);
+    if (nativeSpeech) {
+      await nativeSpeech;
+      return;
+    }
     await initializeSpeech();
     if (!isSpeechEnabled || generation !== speechGeneration) return;
     Tts.speak(`${distance} sonra, ${message}`);
@@ -92,6 +133,11 @@ export async function speakNavigationArrival() {
   if (!isSpeechEnabled) return;
   const generation = speechGeneration;
   try {
+    const nativeSpeech = speakNativeNavigation('Hedefe ulaşıldı.');
+    if (nativeSpeech) {
+      await nativeSpeech;
+      return;
+    }
     await initializeSpeech();
     if (!isSpeechEnabled || generation !== speechGeneration) return;
     Tts.speak('Hedefe ulaşıldı.');
@@ -104,5 +150,5 @@ export function stopNavigationSpeech() {
   isSpeechEnabled = false;
   speechGeneration += 1;
   ensureStopGuard();
-  stopSpeechQueue();
+  stopSpeechQueue(speechGeneration);
 }

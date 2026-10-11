@@ -68,6 +68,49 @@ export function coordinateAtRouteOffset(
   return coordinates[coordinates.length - 1];
 }
 
+/** Splits a route at the travelled distance so it can be styled as passed/remaining. */
+export function splitRouteAtOffset(
+  coordinates: Coordinate[],
+  offsetInMeters: number,
+) {
+  if (coordinates.length < 2)
+    return { passed: coordinates, remaining: coordinates };
+
+  const passed: Coordinate[] = [coordinates[0]];
+  let distanceTravelled = 0;
+  const clampedOffset = Math.max(0, offsetInMeters);
+
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const start = coordinates[index - 1];
+    const end = coordinates[index];
+    const segmentLength = distanceInMeters(start, end);
+    const distanceAtEnd = distanceTravelled + segmentLength;
+
+    if (distanceAtEnd < clampedOffset) {
+      passed.push(end);
+      distanceTravelled = distanceAtEnd;
+      continue;
+    }
+
+    const fraction = segmentLength
+      ? Math.max(0, Math.min(1, (clampedOffset - distanceTravelled) / segmentLength))
+      : 0;
+    const splitPoint: Coordinate = [
+      start[0] + (end[0] - start[0]) * fraction,
+      start[1] + (end[1] - start[1]) * fraction,
+    ];
+    passed.push(splitPoint);
+    return { passed, remaining: [splitPoint, ...coordinates.slice(index)] };
+  }
+
+  const lastCoordinate = coordinates[coordinates.length - 1];
+  return {
+    passed: [...coordinates],
+    // A LineString must have at least two positions, even after arrival.
+    remaining: [lastCoordinate, lastCoordinate],
+  };
+}
+
 export function bearingBetween(from: Coordinate, to: Coordinate) {
   const fromLatitude = (from[1] * Math.PI) / 180;
   const toLatitude = (to[1] * Math.PI) / 180;
@@ -115,6 +158,46 @@ export function routeProgressInMeters(
     progress += length;
   }
   return closestProgress;
+}
+
+/** Returns the shortest straight-line distance from a GPS position to a route. */
+export function distanceToRouteInMeters(
+  position: Coordinate,
+  coordinates: Coordinate[],
+) {
+  if (!coordinates.length) return Number.POSITIVE_INFINITY;
+  if (coordinates.length === 1)
+    return distanceInMeters(position, coordinates[0]);
+
+  let closestDistance = Number.POSITIVE_INFINITY;
+  const longitudeScale = 111_320 * Math.cos((position[1] * Math.PI) / 180);
+
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const start = coordinates[index - 1];
+    const end = coordinates[index];
+    const startX = (start[0] - position[0]) * longitudeScale;
+    const startY = (start[1] - position[1]) * 110_540;
+    const endX = (end[0] - position[0]) * longitudeScale;
+    const endY = (end[1] - position[1]) * 110_540;
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const denominator = deltaX ** 2 + deltaY ** 2;
+    const fraction = denominator
+      ? Math.max(
+          0,
+          Math.min(1, -(startX * deltaX + startY * deltaY) / denominator),
+        )
+      : 0;
+    closestDistance = Math.min(
+      closestDistance,
+      Math.hypot(
+        startX + fraction * deltaX,
+        startY + fraction * deltaY,
+      ),
+    );
+  }
+
+  return closestDistance;
 }
 
 export function snapToRoute(
