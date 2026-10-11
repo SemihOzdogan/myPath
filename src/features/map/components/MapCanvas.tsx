@@ -15,6 +15,7 @@ import type {
   Coordinate,
   Place,
   RouteOption,
+  RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
 import { routeToGeoJson, splitRouteAtOffset } from '../utils/geo';
@@ -38,6 +39,7 @@ type Props = {
   travelMode: TravelMode;
   navigationPosition: Coordinate;
   traveledDistance: number;
+  trafficSections: RouteTrafficSection[];
   onMapPress: (event: unknown) => void;
   onRegionDidChange: (zoom: number) => void;
   onSelectRoute: (option: RouteOption, index: number) => void;
@@ -56,6 +58,7 @@ export function MapCanvas({
   travelMode,
   navigationPosition,
   traveledDistance,
+  trafficSections,
   onMapPress,
   onRegionDidChange,
   onSelectRoute,
@@ -75,6 +78,26 @@ export function MapCanvas({
   const remainingRouteGeoJson = useMemo(
     () => routeToGeoJson(routeSegments.remaining),
     [routeSegments.remaining],
+  );
+  const trafficRouteGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.LineString>>(
+    () => ({
+      type: 'FeatureCollection',
+      features: trafficSections.flatMap(section => {
+        const start = Math.max(0, section.startPointIndex);
+        const end = Math.min(route.length - 1, section.endPointIndex);
+        const coordinates = route.slice(start, end + 1);
+        return coordinates.length > 1
+          ? [
+              {
+                type: 'Feature' as const,
+                properties: { category: section.category ?? 'OTHER' },
+                geometry: { type: 'LineString' as const, coordinates },
+              },
+            ]
+          : [];
+      }),
+    }),
+    [route, trafficSections],
   );
   const alternativeRouteGeoJson = useMemo(
     () => options.map(option => routeToGeoJson(option.coordinates)),
@@ -192,6 +215,48 @@ export function MapCanvas({
             />
           </GeoJSONSource>
         </>
+      )}
+      {trafficRouteGeoJson.features.length > 0 && (
+        <GeoJSONSource
+          key={isNavigating ? 'navigation-traffic' : 'preview-traffic'}
+          // Use a distinct native source while navigating so its red traffic
+          // overlay is recreated above the passed/remaining route layers.
+          id={
+            isNavigating
+              ? 'navigation-traffic-route-source'
+              : 'preview-traffic-route-source'
+          }
+          data={trafficRouteGeoJson}
+        >
+          <Layer
+            id={
+              isNavigating
+                ? 'navigation-traffic-route-outline'
+                : 'preview-traffic-route-outline'
+            }
+            type="line"
+            paint={{
+              'line-color': '#FFFFFF',
+              'line-width': 11,
+              'line-opacity': 0.95,
+            }}
+            layout={routeLineLayout}
+          />
+          <Layer
+            id={
+              isNavigating
+                ? 'navigation-traffic-route-line'
+                : 'preview-traffic-route-line'
+            }
+            type="line"
+            paint={{
+              'line-color': '#E53935',
+              'line-width': 7,
+              'line-opacity': 0.96,
+            }}
+            layout={routeLineLayout}
+          />
+        </GeoJSONSource>
       )}
       {isNavigating ? (
         <Marker id="user-location" lngLat={navigationPosition} anchor="center">

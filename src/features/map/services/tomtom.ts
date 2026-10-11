@@ -2,6 +2,7 @@ import type {
   Coordinate,
   Place,
   RouteOption,
+  RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
 
@@ -17,7 +18,18 @@ type TomTomRoute = {
     lengthInMeters: number;
     tollRoadLengthInMeters?: number;
   };
-  sections?: Array<{ sectionType?: string }>;
+  sections?: Array<{
+    sectionType?: string;
+    startPointIndex?: number;
+    endPointIndex?: number;
+    simpleCategory?: RouteTrafficSection['category'];
+    effectiveSpeedInKmh?: number;
+    delayInSeconds?: number;
+    magnitudeOfDelay?: number;
+    maxSpeedLimitInKmh?: number;
+    streetName?: { text?: string };
+    roadNumbers?: Array<{ text?: string }>;
+  }>;
   legs?: Array<{ points: Array<{ longitude: number; latitude: number }> }>;
   guidance?: {
     instructions?: Array<{
@@ -78,9 +90,20 @@ export async function calculateRoutes(
     ['language', 'tr-TR'],
   ];
   if (travelMode === 'car') {
-    parameters.push(['traffic', 'true'], ['sectionType', 'tollRoad']);
+    parameters.push(
+      ['traffic', 'true'],
+      ['sectionType', 'toll'],
+      ['sectionType', 'traffic'],
+      ['sectionType', 'speedLimit'],
+      ['sectionType', 'importantRoadStretch'],
+    );
   }
-  parameters.forEach(([key, value]) => url.searchParams.set(key, value));
+  parameters.forEach(([key, value]) => {
+    // TomTom accepts sectionType more than once. `set` would silently retain
+    // only the last value, dropping speed-limit and traffic sections.
+    if (key === 'sectionType') url.searchParams.append(key, value);
+    else url.searchParams.set(key, value);
+  });
   const response = await fetch(url.toString());
   if (!response.ok) throw new Error('ROUTE_FAILED');
   const data = (await response.json()) as { routes?: TomTomRoute[] };
@@ -113,6 +136,31 @@ export async function calculateRoutes(
             routeOffsetInMeters: instruction.routeOffsetInMeters ?? 0,
             instructionType: instruction.instructionType,
             turnAngleInDegrees: instruction.turnAngleInDegrees,
+          })),
+        trafficSections: (route.sections ?? [])
+          .filter(section => section.sectionType === 'TRAFFIC')
+          .map(section => ({
+            startPointIndex: section.startPointIndex ?? 0,
+            endPointIndex: section.endPointIndex ?? 0,
+            category: section.simpleCategory,
+            effectiveSpeedInKmh: section.effectiveSpeedInKmh,
+            delayInSeconds: section.delayInSeconds,
+            magnitudeOfDelay: section.magnitudeOfDelay,
+          })),
+        speedLimitSections: (route.sections ?? [])
+          .filter(section => section.sectionType === 'SPEED_LIMIT')
+          .map(section => ({
+            startPointIndex: section.startPointIndex ?? 0,
+            endPointIndex: section.endPointIndex ?? 0,
+            maxSpeedLimitInKmh: section.maxSpeedLimitInKmh,
+          })),
+        roadStretches: (route.sections ?? [])
+          .filter(section => section.sectionType === 'IMPORTANT_ROAD_STRETCH')
+          .map(section => ({
+            startPointIndex: section.startPointIndex ?? 0,
+            endPointIndex: section.endPointIndex ?? 0,
+            streetName: section.streetName?.text,
+            roadNumber: section.roadNumbers?.[0]?.text,
           })),
       },
     ];

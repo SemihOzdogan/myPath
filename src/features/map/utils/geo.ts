@@ -41,6 +41,22 @@ export function distanceInMeters(from: Coordinate, to: Coordinate) {
   return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+export function nearestRoutePointIndex(
+  position: Coordinate,
+  coordinates: Coordinate[],
+) {
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  coordinates.forEach((coordinate, index) => {
+    const distance = distanceInMeters(position, coordinate);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
 export function coordinateAtRouteOffset(
   coordinates: Coordinate[],
   offsetInMeters: number,

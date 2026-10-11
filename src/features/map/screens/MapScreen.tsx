@@ -28,6 +28,7 @@ import type {
   Place,
   RouteOption,
   RouteSummary,
+  RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
 import {
@@ -54,6 +55,7 @@ import {
   formatDistance,
   formatDuration,
   maneuverIcon,
+  nearestRoutePointIndex,
   routeProgressInMeters,
 } from '../utils/geo';
 import type { ManeuverIconName } from '../utils/geo';
@@ -104,6 +106,7 @@ export function MapScreen() {
   const compassHeadingRef = useRef<number | null>(null);
   const searchRequestRef = useRef(0);
   const routePreviewRequestRef = useRef(0);
+  const routeSelectionRequestRef = useRef(0);
   const spokenInstructionRef = useRef<string | null>(null);
   const liveActivityUpdateRef = useRef<string | null>(null);
   const liveActivityEndHandlerRef = useRef<() => void>(() => undefined);
@@ -135,6 +138,40 @@ export function MapScreen() {
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
+  const currentRoutePointIndex = useMemo(
+    () => nearestRoutePointIndex(navigationPosition, routeGeoCoordinates),
+    [navigationPosition, routeGeoCoordinates],
+  );
+  const currentSpeedLimit = useMemo(
+    () =>
+      route?.speedLimitSections.find(
+        section =>
+          section.startPointIndex <= currentRoutePointIndex &&
+          currentRoutePointIndex <= section.endPointIndex,
+      )?.maxSpeedLimitInKmh,
+    [currentRoutePointIndex, route],
+  );
+  const currentTraffic = useMemo(
+    () =>
+      route?.trafficSections.find(
+        section =>
+          section.startPointIndex <= currentRoutePointIndex &&
+          currentRoutePointIndex <= section.endPointIndex,
+      ),
+    [currentRoutePointIndex, route],
+  );
+  const upcomingRoadName = useMemo(() => {
+    const road =
+      route?.roadStretches.find(
+        section =>
+          section.startPointIndex <= currentRoutePointIndex &&
+          currentRoutePointIndex <= section.endPointIndex,
+      ) ??
+      route?.roadStretches.find(
+        section => section.startPointIndex >= currentRoutePointIndex,
+      );
+    return road?.streetName ?? road?.roadNumber;
+  }, [currentRoutePointIndex, route]);
   const traveledDistance = useMemo(() => {
     if (!route || !summary) return 0;
     return Math.min(
@@ -482,6 +519,7 @@ export function MapScreen() {
   function clearRoute() {
     stopDemoDrive();
     routePreviewRequestRef.current += 1;
+    routeSelectionRequestRef.current += 1;
     rerouteRequestRef.current += 1;
     setRouteOptions([]);
     setRoutePreview(null);
@@ -580,6 +618,7 @@ export function MapScreen() {
         : 0;
     compassHeadingRef.current = null;
     navigationSessionRef.current += 1;
+    routeSelectionRequestRef.current += 1;
     rerouteRequestRef.current += 1;
     lastRerouteAtRef.current = 0;
     navigationZoomRef.current = NAVIGATION_ZOOM;
@@ -617,16 +656,29 @@ export function MapScreen() {
       duration: 850,
     });
   }
-  function stopNavigation() {
+  function confirmStopNavigation() {
+    Alert.alert(
+      'Navigasyon bitirilsin mi?',
+      'Aktif rota ve sesli yönlendirme sonlandırılacak.',
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Navigasyonu bitir',
+          style: 'destructive',
+          onPress: () => stopNavigation(),
+        },
+      ],
+    );
+  }
+  function stopNavigation(returnToRouteSelection = false) {
     stopDemoDrive();
     navigationSessionRef.current += 1;
+    const sessionId = navigationSessionRef.current;
     rerouteRequestRef.current += 1;
     setIsNavigating(false);
     setHasArrived(false);
     spokenInstructionRef.current = null;
     setOrigin(navigationPosition);
-    setDestination(null);
-    setRouteOptions([]);
     setSelectedRouteIndex(0);
     setQuery('');
     setResults([]);
@@ -641,6 +693,35 @@ export function MapScreen() {
       bearing: 0,
       duration: 700,
     });
+
+    if (!returnToRouteSelection || !destination) {
+      setDestination(null);
+      setRouteOptions([]);
+      return;
+    }
+
+    // Keep the destination visible and replace the old route alternatives with
+    // routes that start where the user ended navigation.
+    const requestId = ++routeSelectionRequestRef.current;
+    calculateRoutes(
+      TOMTOM_API_KEY,
+      navigationPosition,
+      destination.coordinate,
+      travelMode,
+    )
+      .then(options => {
+        if (
+          options.length &&
+          requestId === routeSelectionRequestRef.current &&
+          sessionId === navigationSessionRef.current
+        ) {
+          setRouteOptions(options);
+          setSelectedRouteIndex(0);
+        }
+      })
+      .catch(() => {
+        // Retain the displayed alternatives if refreshing them is unavailable.
+      });
   }
   function toggleVoiceGuidance() {
     const nextValue = !isVoiceGuidanceEnabled;
@@ -829,6 +910,7 @@ export function MapScreen() {
         travelMode={travelMode}
         navigationPosition={navigationPosition}
         traveledDistance={traveledDistance}
+        trafficSections={route?.trafficSections ?? []}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
         }}
@@ -870,6 +952,7 @@ export function MapScreen() {
                 ? 'Hedefe ulaşıldı'
                 : navigationInstruction?.message ?? 'Hedefe ulaşıyorsun'
             }
+            streetName={upcomingRoadName}
             iconName={
               hasArrived
                 ? 'location-on'
@@ -877,6 +960,13 @@ export function MapScreen() {
             }
             travelMode={travelMode}
             top={insets.top + 16}
+          />
+        )}
+        {isNavigating && travelMode === 'car' && (
+          <RoadStatus
+            speedLimit={currentSpeedLimit}
+            traffic={currentTraffic}
+            top={insets.top + 82}
           />
         )}
         {!isSearchOpen && (
@@ -919,9 +1009,9 @@ export function MapScreen() {
         ) : isNavigating && summary ? (
           <NavigationPanel
             summary={summary}
-            message={navigationInstruction?.message}
             bottomInset={insets.bottom}
-            onEnd={stopNavigation}
+            onEnd={confirmStopNavigation}
+            onChangeRoute={() => stopNavigation(true)}
             isVoiceGuidanceEnabled={isVoiceGuidanceEnabled}
             onToggleVoiceGuidance={toggleVoiceGuidance}
             isDemoDriving={isDemoDriving}
@@ -935,6 +1025,7 @@ export function MapScreen() {
             routeProgress={routeProgress}
             hasArrived={hasArrived}
             travelMode={travelMode}
+            traffic={currentTraffic}
           />
         ) : destination ? (
           summary ? (
@@ -1402,9 +1493,9 @@ function TravelModePicker({
 }
 function NavigationPanel({
   summary,
-  message,
   bottomInset,
   onEnd,
+  onChangeRoute,
   isVoiceGuidanceEnabled,
   onToggleVoiceGuidance,
   isDemoDriving,
@@ -1416,11 +1507,12 @@ function NavigationPanel({
   routeProgress,
   hasArrived,
   travelMode,
+  traffic,
 }: {
   summary: RouteSummary;
-  message?: string;
   bottomInset: number;
   onEnd: () => void;
+  onChangeRoute: () => void;
   isVoiceGuidanceEnabled: boolean;
   onToggleVoiceGuidance: () => void;
   isDemoDriving: boolean;
@@ -1432,12 +1524,25 @@ function NavigationPanel({
   routeProgress: number;
   hasArrived: boolean;
   travelMode: TravelMode;
+  traffic?: RouteTrafficSection;
 }) {
   const isWalking = travelMode === 'pedestrian';
   const progressFillStyle = useMemo(
     () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
     [routeProgress],
   );
+  const trafficStatus = traffic
+    ? traffic.category === 'JAM'
+      ? 'Yoğun trafik'
+      : traffic.category === 'ROAD_WORK'
+        ? 'Yol çalışması'
+        : traffic.category === 'ROAD_CLOSURE'
+          ? 'Yol kapalı'
+          : 'Trafik olayı'
+    : 'Trafik akıcı';
+  const trafficDelay = traffic?.delayInSeconds
+    ? ` · +${formatDuration(traffic.delayInSeconds)}`
+    : '';
 
   return (
     <View
@@ -1462,9 +1567,6 @@ function NavigationPanel({
             {formatDistance(summary.length)} ·{' '}
             {formatDuration(summary.duration)}
           </Text>
-          <Text style={styles.navInstruction}>
-            {message ?? 'Rota devam ediyor'}
-          </Text>
         </View>
         <Pressable
           accessibilityLabel={
@@ -1482,6 +1584,13 @@ function NavigationPanel({
             size={22}
             color={colors.white}
           />
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Rota seçeneklerine dön"
+          style={styles.routeChangeControl}
+          onPress={onChangeRoute}
+        >
+          <MaterialIcons name="alt-route" size={23} color={colors.white} />
         </Pressable>
         {__DEV__ && (
           <Pressable style={styles.demoDrive} onPress={onToggleDemoDrive}>
@@ -1518,6 +1627,22 @@ function NavigationPanel({
           Kalan {formatDistance(remainingDistance)}
         </Text>
       </View>
+      <View
+        style={[
+          styles.trafficStatus,
+          traffic ? styles.trafficStatusActive : styles.trafficStatusClear,
+        ]}
+      >
+        <MaterialIcons
+          name="traffic"
+          size={16}
+          color={traffic ? '#FFF1DD' : '#D6FFF0'}
+        />
+        <Text style={styles.trafficStatusText}>
+          {trafficStatus}
+          {trafficDelay}
+        </Text>
+      </View>
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, progressFillStyle]} />
       </View>
@@ -1534,12 +1659,14 @@ function NavigationPanel({
 function ManeuverCard({
   distance,
   message,
+  streetName,
   iconName,
   travelMode,
   top,
 }: {
   distance: number;
   message: string;
+  streetName?: string;
   iconName: ManeuverIconName;
   travelMode: TravelMode;
   top: number;
@@ -1553,18 +1680,60 @@ function ManeuverCard({
         { top },
       ]}
     >
-      <MaterialIcons
-        name={iconName}
-        size={43}
-        color={colors.white}
-        style={styles.maneuverIcon}
-      />
-      <View>
+      <View style={styles.maneuverPrimaryRow}>
+        <MaterialIcons
+          name={iconName}
+          size={34}
+          color={colors.white}
+          style={styles.maneuverIcon}
+        />
         <Text style={styles.maneuverDistance}>{formatDistance(distance)}</Text>
-        <Text numberOfLines={2} style={styles.maneuverStreet}>
-          {message}
-        </Text>
       </View>
+      <Text numberOfLines={1} style={styles.maneuverStreet}>
+        {streetName ?? message}
+      </Text>
+    </View>
+  );
+}
+
+function RoadStatus({
+  speedLimit,
+  traffic,
+  top,
+}: {
+  speedLimit?: number;
+  traffic?: RouteTrafficSection;
+  top: number;
+}) {
+  if (!speedLimit && !traffic) return null;
+  const trafficLabel =
+    traffic?.category === 'JAM'
+      ? 'Yoğun trafik'
+      : traffic?.category === 'ROAD_WORK'
+        ? 'Yol çalışması'
+        : traffic?.category === 'ROAD_CLOSURE'
+          ? 'Yol kapalı'
+          : traffic
+            ? 'Trafik olayı'
+            : null;
+  return (
+    <View style={[styles.roadStatus, { top }]}>
+      {speedLimit && (
+        <View style={styles.speedLimitBadge}>
+          <Text style={styles.speedLimitValue}>{Math.round(speedLimit)}</Text>
+          <Text style={styles.speedLimitUnit}>km/s</Text>
+        </View>
+      )}
+      {trafficLabel && (
+        <View style={styles.trafficBadge}>
+          <MaterialIcons name="traffic" size={17} color="#FFF3D9" />
+          <Text style={styles.trafficBadgeText}>
+            {traffic?.effectiveSpeedInKmh
+              ? `${trafficLabel} · ${Math.round(traffic.effectiveSpeedInKmh)} km/s`
+              : trafficLabel}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -1573,6 +1742,37 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   overlay: { ...StyleSheet.absoluteFill, justifyContent: 'flex-end' },
   tools: { position: 'absolute', right: 16, zIndex: 3, elevation: 3 },
+  roadStatus: {
+    position: 'absolute',
+    right: 16,
+    alignItems: 'flex-end',
+    gap: 8,
+    zIndex: 3,
+    elevation: 3,
+  },
+  speedLimitBadge: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 5,
+    borderColor: '#FF565A',
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speedLimitValue: { color: '#17191D', fontSize: 22, fontWeight: '900' },
+  speedLimitUnit: { color: '#5D6470', fontSize: 9, fontWeight: '800' },
+  trafficBadge: {
+    maxWidth: 190,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#C95C00',
+  },
+  trafficBadgeText: { color: colors.white, fontSize: 12, fontWeight: '800' },
   location: {
     width: 54,
     height: 54,
@@ -1596,22 +1796,20 @@ const styles = StyleSheet.create({
   maneuverCard: {
     position: 'absolute',
     left: 22,
-    padding: 13,
-    minWidth: 188,
+    width: 170,
+    padding: 12,
     backgroundColor: '#2168F4',
-    borderRadius: 20,
-    flexDirection: 'row',
-    gap: 10,
-    alignItems: 'center',
+    borderRadius: 16,
   },
   walkingManeuverCard: { backgroundColor: '#0E8062' },
-  maneuverIcon: { width: 43, textAlign: 'center' },
+  maneuverIcon: { width: 34, textAlign: 'center' },
+  maneuverPrimaryRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   maneuverDistance: { fontSize: 28, color: colors.white, fontWeight: '800' },
   maneuverStreet: {
-    fontSize: 15,
+    fontSize: 16,
     color: colors.white,
-    marginTop: 1,
-    maxWidth: 185,
+    fontWeight: '700',
+    marginTop: 6,
   },
   homePanel: {
     backgroundColor: colors.surface,
@@ -1941,7 +2139,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   navMetric: { color: colors.white, fontWeight: '800', fontSize: 17 },
-  navInstruction: { color: colors.textMuted, marginTop: 4 },
   progressLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1961,6 +2158,19 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.primary,
   },
+  trafficStatus: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 10,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  trafficStatusActive: { backgroundColor: '#B94F00' },
+  trafficStatusClear: { backgroundColor: '#15735B' },
+  trafficStatusText: { color: colors.white, fontSize: 12, fontWeight: '800' },
   finishNavigationButton: {
     marginTop: 14,
     borderRadius: 14,
@@ -1977,6 +2187,15 @@ const styles = StyleSheet.create({
     width: 45,
     height: 45,
     marginLeft: 12,
+    marginRight: 8,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeChangeControl: {
+    width: 45,
+    height: 45,
     marginRight: 8,
     borderRadius: 14,
     backgroundColor: colors.surfaceElevated,
