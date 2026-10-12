@@ -37,6 +37,12 @@ import {
   searchPlaces,
 } from '../services/tomtom';
 import {
+  loadSavedPlaces,
+  removeSavedPlace,
+  savePlace,
+  type SavedPlace,
+} from '../services/savedPlaces';
+import {
   enableNavigationSpeech,
   speakNavigationArrival,
   speakNavigationInstruction,
@@ -135,6 +141,7 @@ export function MapScreen() {
   const [isVoiceGuidanceEnabled, setIsVoiceGuidanceEnabled] = useState(true);
   const [isDemoDriving, setIsDemoDriving] = useState(false);
   const [isDemoRerouting, setIsDemoRerouting] = useState(false);
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
@@ -221,6 +228,10 @@ export function MapScreen() {
 
   useEffect(() => {
     locateUser().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadSavedPlaces().then(setSavedPlaces).catch(() => undefined);
   }, []);
 
   useEffect(
@@ -576,6 +587,7 @@ export function MapScreen() {
       setRouteOptions(options);
       setSelectedRouteIndex(0);
       fitRoute(options[0]);
+      savePlace(destination).then(setSavedPlaces).catch(() => undefined);
     } catch {
       Alert.alert(
         'Rota oluşturulamadı',
@@ -993,16 +1005,20 @@ export function MapScreen() {
           </View>
         )}
         {isSearchOpen && !destination ? (
-          <SearchPanel
-            query={query}
-            results={results}
-            loading={isSearching}
+        <SearchPanel
+          query={query}
+          results={results}
+          savedPlaces={savedPlaces}
+          loading={isSearching}
             bottomInset={insets.bottom}
             onChange={changeSearchQuery}
             onSearch={() => {
               submitSearch().catch(() => undefined);
             }}
-            onPick={chooseDestination}
+          onPick={chooseDestination}
+          onRemoveSaved={id => {
+            removeSavedPlace(id).then(setSavedPlaces).catch(() => undefined);
+          }}
             onClear={() => changeSearchQuery('')}
             onClose={closeSearch}
           />
@@ -1025,7 +1041,6 @@ export function MapScreen() {
             routeProgress={routeProgress}
             hasArrived={hasArrived}
             travelMode={travelMode}
-            traffic={currentTraffic}
           />
         ) : destination ? (
           summary ? (
@@ -1118,24 +1133,29 @@ function HomePanel({
 function SearchPanel({
   query,
   results,
+  savedPlaces,
   loading,
   bottomInset,
   onChange,
   onSearch,
   onPick,
+  onRemoveSaved,
   onClear,
   onClose,
 }: {
   query: string;
   results: Place[];
+  savedPlaces: SavedPlace[];
   loading: boolean;
   bottomInset: number;
   onChange: (value: string) => void;
   onSearch: () => void;
   onPick: (place: Place) => void;
+  onRemoveSaved: (id: string) => void;
   onClear: () => void;
   onClose: () => void;
 }) {
+  const shouldShowSavedPlaces = !query.trim() && !loading;
   return (
     <DraggableSheet
       style={[
@@ -1145,8 +1165,14 @@ function SearchPanel({
       ]}
       onClose={onClose}
     >
+      <View style={[styles.handle, styles.searchPanelHandle]} />
       <View style={styles.searchPanelHeader}>
-        <View style={[styles.handle, styles.searchPanelHandle]} />
+        <View>
+          <Text style={styles.searchPanelTitle}>Mekân ara</Text>
+          <Text style={styles.searchPanelSubtitle}>
+            Adres, işletme veya kategori keşfet
+          </Text>
+        </View>
         <Pressable
           accessibilityLabel="Aramayı kapat"
           style={styles.modalCloseButton}
@@ -1172,15 +1198,25 @@ function SearchPanel({
           returnKeyType="search"
           onSubmitEditing={onSearch}
         />
+        {query.length > 0 && (
+          <Pressable
+            accessibilityLabel="Arama metnini temizle"
+            style={styles.clearSearchButton}
+            onPress={onClear}
+          >
+            <MaterialIcons name="close" size={18} color={colors.textMuted} />
+          </Pressable>
+        )}
         <Pressable
-          accessibilityLabel="Arama metnini temizle"
-          style={styles.closeButton}
-          onPress={onClear}
+          accessibilityLabel="Ara"
+          style={styles.find}
+          onPress={onSearch}
         >
-          <MaterialIcons name="close" size={25} color={colors.textMuted} />
-        </Pressable>
-        <Pressable style={styles.find} onPress={onSearch}>
-          <Text style={styles.findText}>{loading ? '...' : 'Bul'}</Text>
+          {loading ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <MaterialIcons name="arrow-forward" size={22} color={colors.white} />
+          )}
         </Pressable>
       </View>
       <ScrollView style={styles.results} keyboardShouldPersistTaps="handled">
@@ -1189,8 +1225,7 @@ function SearchPanel({
             style={styles.searchState}
             color={colors.primary}
           />
-        ) : (
-          results.length > 0 &&
+        ) : results.length > 0 ? (
           results.map(place => (
             <Pressable
               key={`${place.coordinate[0]}-${place.coordinate[1]}`}
@@ -1208,7 +1243,38 @@ function SearchPanel({
               </View>
             </Pressable>
           ))
-        )}
+        ) : shouldShowSavedPlaces && savedPlaces.length > 0 ? (
+          <View style={styles.savedPlaces}>
+            <Text style={styles.savedPlacesTitle}>SON OLUŞTURULAN ROTALAR</Text>
+            {savedPlaces.map(place => (
+              <View key={place.id} style={styles.savedPlaceRow}>
+                <Pressable
+                  style={styles.savedPlacePick}
+                  onPress={() => onPick(place)}
+                >
+                  <View style={styles.savedPlaceIcon}>
+                    <MaterialIcons name="history" size={20} color={colors.primary} />
+                  </View>
+                  <View style={styles.savedPlaceCopy}>
+                    <Text numberOfLines={1} style={styles.resultTitle}>
+                      {place.title}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.resultLabel}>
+                      {place.label}
+                    </Text>
+                  </View>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`${place.title} kaydını sil`}
+                  style={styles.deleteSavedPlace}
+                  onPress={() => onRemoveSaved(place.id)}
+                >
+                  <MaterialIcons name="delete-outline" size={22} color={colors.textMuted} />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </ScrollView>
     </DraggableSheet>
   );
@@ -1288,7 +1354,7 @@ function PlacePanel({
       </View>
       <Text style={styles.routeCreationHint}>
         {travelMode === 'car'
-          ? 'Rota seçeneklerini karşılaştırıp sana en uygun yolu seçebilirsin.'
+          ? 'Tek yönler ve dönüş yasakları dikkate alınarak rota hesaplanır.'
           : 'Yaya yollarını kullanarak en uygun rotayı bulabilirsin.'}
       </Text>
       <Pressable style={styles.routeCreationButton} onPress={onRoute}>
@@ -1334,6 +1400,7 @@ function RoutePanel({
         {destination.title}
       </Text>
       <TravelModePicker value={travelMode} onChange={onTravelModeChange} />
+
       <Text style={styles.routePickerLabel}>ROTA SEÇENEKLERİ</Text>
       <View style={styles.routeOptions}>
         {options.map((option, index) => {
@@ -1507,7 +1574,6 @@ function NavigationPanel({
   routeProgress,
   hasArrived,
   travelMode,
-  traffic,
 }: {
   summary: RouteSummary;
   bottomInset: number;
@@ -1524,26 +1590,12 @@ function NavigationPanel({
   routeProgress: number;
   hasArrived: boolean;
   travelMode: TravelMode;
-  traffic?: RouteTrafficSection;
 }) {
   const isWalking = travelMode === 'pedestrian';
   const progressFillStyle = useMemo(
     () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
     [routeProgress],
   );
-  const trafficStatus = traffic
-    ? traffic.category === 'JAM'
-      ? 'Yoğun trafik'
-      : traffic.category === 'ROAD_WORK'
-        ? 'Yol çalışması'
-        : traffic.category === 'ROAD_CLOSURE'
-          ? 'Yol kapalı'
-          : 'Trafik olayı'
-    : 'Trafik akıcı';
-  const trafficDelay = traffic?.delayInSeconds
-    ? ` · +${formatDuration(traffic.delayInSeconds)}`
-    : '';
-
   return (
     <View
       style={[
@@ -1625,22 +1677,6 @@ function NavigationPanel({
         </Text>
         <Text style={styles.progressLabel}>
           Kalan {formatDistance(remainingDistance)}
-        </Text>
-      </View>
-      <View
-        style={[
-          styles.trafficStatus,
-          traffic ? styles.trafficStatusActive : styles.trafficStatusClear,
-        ]}
-      >
-        <MaterialIcons
-          name="traffic"
-          size={16}
-          color={traffic ? '#FFF1DD' : '#D6FFF0'}
-        />
-        <Text style={styles.trafficStatusText}>
-          {trafficStatus}
-          {trafficDelay}
         </Text>
       </View>
       <View style={styles.progressTrack}>
@@ -1844,20 +1880,29 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   searchPanelHeader: {
-    height: 44,
-    position: 'relative',
+    minHeight: 58,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
   },
-  searchPanelHandle: { marginBottom: 0 },
+  searchPanelHandle: { marginBottom: 11 },
+  searchPanelTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.35,
+  },
+  searchPanelSubtitle: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 4,
+  },
   modalCloseButton: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.surfaceElevated,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#272A2F',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1890,33 +1935,74 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   searchRow: {
-    height: 70,
-    backgroundColor: colors.surfaceDark,
-    borderRadius: 22,
+    height: 60,
+    backgroundColor: '#111315',
+    borderRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 14,
+    paddingLeft: 16,
+    borderWidth: 1,
+    borderColor: '#30333A',
   },
   input: {
     flex: 1,
-    height: 62,
+    height: 58,
     color: colors.text,
-    fontSize: 18,
+    fontSize: 16,
     paddingHorizontal: 8,
   },
-  closeButton: { paddingHorizontal: 10, paddingVertical: 10 },
+  clearSearchButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#25282D',
+    marginHorizontal: 5,
+  },
   find: {
-    height: 70,
-    paddingHorizontal: 23,
-    marginLeft: 8,
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    marginRight: 7,
     backgroundColor: colors.primary,
-    borderTopRightRadius: 22,
-    borderBottomRightRadius: 22,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  findText: { color: colors.white, fontSize: 17, fontWeight: '800' },
-  results: { marginTop: 18 },
+  results: { marginTop: 20 },
   searchState: { marginTop: 24 },
+  savedPlaces: { paddingTop: 5 },
+  savedPlacesTitle: {
+    color: '#8D929B',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 7,
+  },
+  savedPlaceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.surfaceElevated,
+  },
+  savedPlacePick: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 13,
+  },
+  savedPlaceIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    marginRight: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF1FF',
+  },
+  savedPlaceCopy: { flex: 1, minWidth: 0 },
+  deleteSavedPlace: { padding: 11 },
   emptySearch: { color: colors.textMuted, marginTop: 24, textAlign: 'center' },
   result: {
     paddingVertical: 15,
@@ -2035,6 +2121,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     marginTop: 2,
+  },
+  roadRulesHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 11,
+    backgroundColor: '#EAF1FF',
+  },
+  roadRulesHintText: {
+    flex: 1,
+    color: '#2856A8',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
   },
   routePickerLabel: {
     color: '#8D929B',

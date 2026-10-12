@@ -9,5 +9,7 @@ module.exports = {
     '^react-native-compass-heading$': '<rootDir>/__mocks__/compass-heading.ts',
     '^react-native-geolocation-service$': '<rootDir>/__mocks__/geolocation.ts',
     '^react-native-tts$': '<rootDir>/__mocks__/react-native-tts.ts',
+    '^@react-native-async-storage/async-storage$':
+      '<rootDir>/__mocks__/async-storage.ts',
   },
 };

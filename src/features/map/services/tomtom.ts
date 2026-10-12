@@ -78,6 +78,9 @@ export async function calculateRoutes(
   travelMode: TravelMode = 'car',
 ): Promise<RouteOption[]> {
   requireKey(apiKey);
+  // TomTom's car graph applies legal driving restrictions (including one-way
+  // streets and prohibited turns) by default. Keep this request on the car
+  // profile instead of falling back to a straight-line or pedestrian route.
   const url = new URL(
     `https://api.tomtom.com/routing/1/calculateRoute/${origin[1]},${origin[0]}:${destination[1]},${destination[0]}/json`,
   );

@@ -18,13 +18,33 @@ import type {
   RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
-import { routeToGeoJson, splitRouteAtOffset } from '../utils/geo';
+import {
+  routeDirectionMarkers,
+  routeToGeoJson,
+  splitRouteAtOffset,
+} from '../utils/geo';
 
 const navigationArrow = require('../../../../assets/navigation-arrow.png');
 const destinationPin = require('../../../../assets/destination-pin.png');
 const INITIAL_CAMERA_VIEW = { center: ISTANBUL, zoom: 11 };
 const routeLineLayout = { 'line-cap': 'round', 'line-join': 'round' } as const;
 const routeHitbox = { top: 24, right: 24, bottom: 24, left: 24 } as const;
+const oneWayRoadClasses = [
+  'minor',
+  'motorway',
+  'primary',
+  'secondary',
+  'service',
+  'tertiary',
+  'trunk',
+];
+const oneWayRoadLayout = {
+  'icon-image': 'oneway',
+  'icon-rotation-alignment': 'map',
+  'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.55, 19, 1] as never,
+  'symbol-placement': 'line',
+  'symbol-spacing': 68,
+} as const;
 
 type Props = {
   cameraRef: React.RefObject<CameraRef | null>;
@@ -79,6 +99,10 @@ export function MapCanvas({
     () => routeToGeoJson(routeSegments.remaining),
     [routeSegments.remaining],
   );
+  const routeDirectionGeoJson = useMemo(
+    () => routeDirectionMarkers(route),
+    [route],
+  );
   const trafficRouteGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.LineString>>(
     () => ({
       type: 'FeatureCollection',
@@ -114,6 +138,39 @@ export function MapCanvas({
       }
     >
       <Camera ref={cameraRef} initialViewState={INITIAL_CAMERA_VIEW} />
+      {/*
+       * These use the same OpenFreeMap/OpenMapTiles road features as the base
+       * map, but are rendered above it so one-way arrows stay visible on a
+       * navigation map. `oneway` follows the original OSM line direction.
+       */}
+      <Layer
+        id="one-way-road-arrows-forward"
+        type="symbol"
+        source="openmaptiles"
+        source-layer="transportation"
+        minzoom={14}
+        filter={[
+          'all',
+          ['==', ['get', 'oneway'], 1],
+          ['match', ['get', 'class'], oneWayRoadClasses, true, false],
+        ]}
+        layout={{ ...oneWayRoadLayout, 'icon-rotate': 90 }}
+        paint={{ 'icon-opacity': 0.82 }}
+      />
+      <Layer
+        id="one-way-road-arrows-reverse"
+        type="symbol"
+        source="openmaptiles"
+        source-layer="transportation"
+        minzoom={14}
+        filter={[
+          'all',
+          ['==', ['get', 'oneway'], -1],
+          ['match', ['get', 'class'], oneWayRoadClasses, true, false],
+        ]}
+        layout={{ ...oneWayRoadLayout, 'icon-rotate': -90 }}
+        paint={{ 'icon-opacity': 0.82 }}
+      />
       {!isNavigating &&
         options.map(
           (option, index) =>
@@ -215,6 +272,37 @@ export function MapCanvas({
             />
           </GeoJSONSource>
         </>
+      )}
+      {routeDirectionGeoJson.features.length > 0 && !isWalking && (
+        <GeoJSONSource id="route-direction-source" data={routeDirectionGeoJson}>
+          <Layer
+            id="route-direction-arrows"
+            type="symbol"
+            layout={{
+              'text-field': '↑',
+              // OpenFreeMap publishes Noto Sans glyphs. Leaving this unset
+              // makes MapLibre request its Open Sans/Arial fallback, which
+              // the tile server does not provide and logs an error on both
+              // iOS and Android.
+              'text-font': ['Noto Sans Regular'],
+              'text-size': 17,
+              // Route bearings are north-based, just like MapLibre symbol
+              // rotation. Keeping the alignment on the map makes the arrows
+              // follow the road when the navigation camera rotates.
+              'text-rotate': ['get', 'bearing'],
+              'text-rotation-alignment': 'map',
+              'text-pitch-alignment': 'map',
+              'text-allow-overlap': true,
+              'text-ignore-placement': true,
+            }}
+            paint={{
+              'text-color': '#FFFFFF',
+              'text-halo-color': '#1667FF',
+              'text-halo-width': 1.5,
+              'text-halo-blur': 0.4,
+            }}
+          />
+        </GeoJSONSource>
       )}
       {trafficRouteGeoJson.features.length > 0 && (
         <GeoJSONSource
