@@ -132,6 +132,9 @@ export function MapCanvas({
       ref={mapRef}
       mapStyle={MAP_STYLE_URL}
       style={styles.map}
+      compass={false}
+      logo={false}
+      attribution={false}
       onPress={onMapPress as never}
       onRegionDidChange={(event: { nativeEvent: { zoom: number } }) =>
         onRegionDidChange(event.nativeEvent.zoom)
@@ -185,17 +188,32 @@ export function MapCanvas({
                   onSelectRoute(option, index);
                 }}
               >
-                <Layer
-                  id={`alternative-line-${index}`}
-                  type="line"
-                  paint={{
-                    'line-color': isWalking ? '#5DCFA5' : '#9B5DE5',
-                    'line-width': 5,
-                    'line-opacity': 0.78,
-                    ...(isWalking ? { 'line-dasharray': [1.2, 1.4] } : {}),
-                  }}
-                  layout={routeLineLayout}
-                />
+                {isWalking ? (
+                  <Layer
+                    key={`alternative-line-${index}-walk`}
+                    id={`alternative-line-${index}-walk`}
+                    type="line"
+                    paint={{
+                      'line-color': '#5DCFA5',
+                      'line-width': 5,
+                      'line-opacity': 0.78,
+                      'line-dasharray': [1.2, 1.4],
+                    }}
+                    layout={routeLineLayout}
+                  />
+                ) : (
+                  <Layer
+                    key={`alternative-line-${index}-car`}
+                    id={`alternative-line-${index}-car`}
+                    type="line"
+                    paint={{
+                      'line-color': '#9B5DE5',
+                      'line-width': 5,
+                      'line-opacity': 0.78,
+                    }}
+                    layout={routeLineLayout}
+                  />
+                )}
               </GeoJSONSource>
             ),
         )}
@@ -211,17 +229,32 @@ export function MapCanvas({
             }}
             layout={routeLineLayout}
           />
-          <Layer
-            id="route-line"
-            type="line"
-            paint={{
-              'line-color': isWalking ? '#16A879' : '#1667FF',
-              'line-width': 7,
-              'line-opacity': 0.95,
-              ...(isWalking ? { 'line-dasharray': [1.2, 1.4] } : {}),
-            }}
-            layout={routeLineLayout}
-          />
+          {isWalking ? (
+            <Layer
+              key="route-line-walk"
+              id="route-line-walk"
+              type="line"
+              paint={{
+                'line-color': '#16A879',
+                'line-width': 7,
+                'line-opacity': 0.95,
+                'line-dasharray': [1.2, 1.4],
+              }}
+              layout={routeLineLayout}
+            />
+          ) : (
+            <Layer
+              key="route-line-car"
+              id="route-line-car"
+              type="line"
+              paint={{
+                'line-color': '#1667FF',
+                'line-width': 7,
+                'line-opacity': 0.95,
+              }}
+              layout={routeLineLayout}
+            />
+          )}
         </GeoJSONSource>
       )}
       {route.length > 1 && isNavigating && (
@@ -259,17 +292,32 @@ export function MapCanvas({
               }}
               layout={routeLineLayout}
             />
-            <Layer
-              id="remaining-route-line"
-              type="line"
-              paint={{
-                'line-color': isWalking ? '#16A879' : '#1667FF',
-                'line-width': 7,
-                'line-opacity': 0.95,
-                ...(isWalking ? { 'line-dasharray': [1.2, 1.4] } : {}),
-              }}
-              layout={routeLineLayout}
-            />
+            {isWalking ? (
+              <Layer
+                key="remaining-route-line-walk"
+                id="remaining-route-line-walk"
+                type="line"
+                paint={{
+                  'line-color': '#16A879',
+                  'line-width': 7,
+                  'line-opacity': 0.95,
+                  'line-dasharray': [1.2, 1.4],
+                }}
+                layout={routeLineLayout}
+              />
+            ) : (
+              <Layer
+                key="remaining-route-line-car"
+                id="remaining-route-line-car"
+                type="line"
+                paint={{
+                  'line-color': '#1667FF',
+                  'line-width': 7,
+                  'line-opacity': 0.95,
+                }}
+                layout={routeLineLayout}
+              />
+            )}
           </GeoJSONSource>
         </>
       )}

@@ -22,8 +22,19 @@ DerivedData
 *.xcuserstate
 **/.xcode.env.local
 
-# Local API credentials
+# Local credentials — never commit real keys or tokens.
+.env
+.env.*
+!.env.example
+!/src/config.example.ts
 /src/config.local.ts
+/src/config.*.local.ts
+*.pem
+*.p12
+*.p8
+*.mobileprovision
+service-account*.json
+credentials*.json
 
 # Android/IntelliJ
 #
@@ -79,4 +90,3 @@ yarn-error.log
 
 # file readme deleted
 *.md  
-

@@ -133,6 +133,7 @@ export function MapScreen() {
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
   const [routePreview, setRoutePreview] = useState<RouteSummary | null>(null);
   const [isRoutePreviewLoading, setIsRoutePreviewLoading] = useState(false);
+  const [isRouteModeChanging, setIsRouteModeChanging] = useState(false);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [travelMode, setTravelMode] = useState<TravelMode>('car');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -193,6 +194,10 @@ export function MapScreen() {
   const routeProgress = summary?.length
     ? (traveledDistance / summary.length) * 100
     : 0;
+  const remainingDuration = summary?.length
+    ? summary.duration * (remainingDistance / summary.length)
+    : 0;
+  const estimatedArrival = arrivalTime(remainingDuration).replace('Varış ', '');
   const navigationInstruction = useMemo(
     () =>
       route?.instructions.find(
@@ -597,8 +602,40 @@ export function MapScreen() {
   }
   function changeTravelMode(mode: TravelMode) {
     if (mode === travelMode) return;
+
+    // Before a route is created, the preview effect will refresh itself when
+    // the mode changes. Once alternatives are displayed, retain the current
+    // line until the matching-mode route is ready so the map never flashes
+    // back to an empty state.
+    if (!destination || routeOptions.length === 0) {
+      setTravelMode(mode);
+      return;
+    }
+
+    const requestId = ++routeSelectionRequestRef.current;
+    const previousMode = travelMode;
     setTravelMode(mode);
-    clearRoute();
+    setIsRouteModeChanging(true);
+    calculateRoutes(TOMTOM_API_KEY, origin, destination.coordinate, mode)
+      .then(options => {
+        if (requestId !== routeSelectionRequestRef.current || !options.length)
+          throw new Error('ROUTE_FAILED');
+        setRouteOptions(options);
+        setSelectedRouteIndex(0);
+        fitRoute(options[0]);
+      })
+      .catch(() => {
+        if (requestId !== routeSelectionRequestRef.current) return;
+        setTravelMode(previousMode);
+        Alert.alert(
+          'Rota güncellenemedi',
+          'Mevcut rota korunuyor. Bağlantını kontrol edip tekrar deneyebilirsin.',
+        );
+      })
+      .finally(() => {
+        if (requestId === routeSelectionRequestRef.current)
+          setIsRouteModeChanging(false);
+      });
   }
   function fitRoute(option: RouteOption) {
     const longitudes = option.coordinates.map(point => point[0]);
@@ -741,6 +778,47 @@ export function MapScreen() {
     spokenInstructionRef.current = null;
     if (nextValue) enableNavigationSpeech();
     else stopNavigationSpeech();
+  }
+  function recenterNavigationCamera() {
+    if (!isNavigating || !route || !summary) {
+      locateUser().catch(() => undefined);
+      return;
+    }
+    const nextCoordinate = coordinateAtRouteOffset(
+      route.coordinates,
+      Math.min(summary.length, traveledDistance + 25),
+    );
+    navigationZoomRef.current = NAVIGATION_ZOOM;
+    cameraRef.current?.flyTo({
+      center: navigationPosition,
+      zoom: NAVIGATION_ZOOM,
+      pitch: NAVIGATION_PITCH,
+      bearing: bearingBetween(navigationPosition, nextCoordinate),
+      duration: 500,
+    });
+  }
+  function showNavigationOptions() {
+    const options = [
+      ...( __DEV__
+        ? [
+            {
+              text: isDemoDriving ? 'Demo sürüşü durdur' : 'Demo sürüşü başlat',
+              onPress: toggleDemoDrive,
+            },
+          ]
+        : []),
+      {
+        text: 'Navigasyonu bitir',
+        style: 'destructive' as const,
+        onPress: confirmStopNavigation,
+      },
+      { text: 'Vazgeç', style: 'cancel' as const },
+    ];
+    Alert.alert('Navigasyon seçenekleri', undefined, options);
+  }
+  function endNavigationAndSearch() {
+    stopNavigation();
+    openSearch();
   }
   function stopDemoDrive(shouldStopSpeech = true) {
     if (demoDriveTimerRef.current) {
@@ -945,7 +1023,7 @@ export function MapScreen() {
             />
           </Pressable>
         )}
-        {isNavigating && summary && (
+        {isNavigating && summary && !hasArrived && (
           <ManeuverCard
             distance={
               navigationInstruction
@@ -978,7 +1056,7 @@ export function MapScreen() {
           <RoadStatus
             speedLimit={currentSpeedLimit}
             traffic={currentTraffic}
-            top={insets.top + 82}
+            top={insets.top + 142}
           />
         )}
         {!isSearchOpen && (
@@ -990,14 +1068,18 @@ export function MapScreen() {
             ]}
           >
             <Pressable
-              accessibilityLabel="Konumuma git"
+              accessibilityLabel={
+                isNavigating ? 'Navigasyon görünümüne dön' : 'Konumuma git'
+              }
               style={[styles.location, locationButtonSurface]}
               onPress={() => {
-                locateUser().catch(() => undefined);
+                recenterNavigationCamera();
               }}
             >
-              {isLocating ? (
+              {isLocating && !isNavigating ? (
                 <ActivityIndicator color={colors.background} />
+              ) : isNavigating ? (
+                <MaterialIcons name="navigation" size={26} color={colors.background} />
               ) : (
                 <Image source={locationPin} style={locationPinStyle} />
               )}
@@ -1026,12 +1108,11 @@ export function MapScreen() {
           <NavigationPanel
             summary={summary}
             bottomInset={insets.bottom}
-            onEnd={confirmStopNavigation}
+            onEnd={hasArrived ? () => stopNavigation() : confirmStopNavigation}
             onChangeRoute={() => stopNavigation(true)}
             isVoiceGuidanceEnabled={isVoiceGuidanceEnabled}
             onToggleVoiceGuidance={toggleVoiceGuidance}
             isDemoDriving={isDemoDriving}
-            onToggleDemoDrive={toggleDemoDrive}
             isDemoRerouting={isDemoRerouting}
             onDemoReroute={() => {
               triggerDemoReroute().catch(() => undefined);
@@ -1039,8 +1120,12 @@ export function MapScreen() {
             traveledDistance={traveledDistance}
             remainingDistance={remainingDistance}
             routeProgress={routeProgress}
+            remainingDuration={remainingDuration}
+            estimatedArrival={estimatedArrival}
             hasArrived={hasArrived}
             travelMode={travelMode}
+            onShowOptions={showNavigationOptions}
+            onNewRoute={endNavigationAndSearch}
           />
         ) : destination ? (
           summary ? (
@@ -1049,6 +1134,7 @@ export function MapScreen() {
               options={routeOptions}
               selectedIndex={selectedRouteIndex}
               travelMode={travelMode}
+              isTravelModeChanging={isRouteModeChanging}
               bottomInset={insets.bottom}
               onSelect={selectRoute}
               onStart={startNavigation}
@@ -1369,6 +1455,7 @@ function RoutePanel({
   options,
   selectedIndex,
   travelMode,
+  isTravelModeChanging,
   bottomInset,
   onSelect,
   onStart,
@@ -1379,6 +1466,7 @@ function RoutePanel({
   options: RouteOption[];
   selectedIndex: number;
   travelMode: TravelMode;
+  isTravelModeChanging: boolean;
   bottomInset: number;
   onSelect: (option: RouteOption, index: number) => void;
   onStart: () => void;
@@ -1399,7 +1487,18 @@ function RoutePanel({
       <Text numberOfLines={1} style={styles.routeTo}>
         {destination.title}
       </Text>
-      <TravelModePicker value={travelMode} onChange={onTravelModeChange} />
+      <TravelModePicker
+        value={travelMode}
+        disabled={isTravelModeChanging}
+        onChange={onTravelModeChange}
+      />
+
+      {isTravelModeChanging && (
+        <View style={styles.routeModeUpdating}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.routeModeUpdatingText}>Rota güncelleniyor</Text>
+        </View>
+      )}
 
       <Text style={styles.routePickerLabel}>ROTA SEÇENEKLERİ</Text>
       <View style={styles.routeOptions}>
@@ -1414,6 +1513,7 @@ function RoutePanel({
               key={index}
               accessibilityRole="button"
               accessibilityState={{ selected: isSelected }}
+              disabled={isTravelModeChanging}
               style={[
                 styles.routeOption,
                 isSelected && styles.routeOptionSelected,
@@ -1494,7 +1594,11 @@ function RoutePanel({
           );
         })}
       </View>
-      <Pressable style={styles.primaryButton} onPress={onStart}>
+      <Pressable
+        disabled={isTravelModeChanging}
+        style={[styles.primaryButton, isTravelModeChanging && styles.buttonDisabled]}
+        onPress={onStart}
+      >
         <Text style={styles.primaryButtonText}>Navigasyonu başlat</Text>
       </Pressable>
     </DraggableSheet>
@@ -1502,9 +1606,11 @@ function RoutePanel({
 }
 function TravelModePicker({
   value,
+  disabled = false,
   onChange,
 }: {
   value: TravelMode;
+  disabled?: boolean;
   onChange: (mode: TravelMode) => void;
 }) {
   return (
@@ -1512,6 +1618,7 @@ function TravelModePicker({
       <Pressable
         accessibilityRole="radio"
         accessibilityState={{ selected: value === 'car' }}
+        disabled={disabled}
         style={[
           styles.travelModeOption,
           value === 'car' && styles.travelModeOptionSelected,
@@ -1535,6 +1642,7 @@ function TravelModePicker({
       <Pressable
         accessibilityRole="radio"
         accessibilityState={{ selected: value === 'pedestrian' }}
+        disabled={disabled}
         style={[
           styles.travelModeOption,
           value === 'pedestrian' && styles.travelModeOptionSelected,
@@ -1565,13 +1673,16 @@ function NavigationPanel({
   onChangeRoute,
   isVoiceGuidanceEnabled,
   onToggleVoiceGuidance,
+  onShowOptions,
+  onNewRoute,
   isDemoDriving,
-  onToggleDemoDrive,
   isDemoRerouting,
   onDemoReroute,
   traveledDistance,
   remainingDistance,
   routeProgress,
+  remainingDuration,
+  estimatedArrival,
   hasArrived,
   travelMode,
 }: {
@@ -1581,17 +1692,21 @@ function NavigationPanel({
   onChangeRoute: () => void;
   isVoiceGuidanceEnabled: boolean;
   onToggleVoiceGuidance: () => void;
+  onShowOptions: () => void;
+  onNewRoute: () => void;
   isDemoDriving: boolean;
-  onToggleDemoDrive: () => void;
   isDemoRerouting: boolean;
   onDemoReroute: () => void;
   traveledDistance: number;
   remainingDistance: number;
   routeProgress: number;
+  remainingDuration: number;
+  estimatedArrival: string;
   hasArrived: boolean;
   travelMode: TravelMode;
 }) {
   const isWalking = travelMode === 'pedestrian';
+  const completedDistance = hasArrived ? summary.length : traveledDistance;
   const progressFillStyle = useMemo(
     () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
     [routeProgress],
@@ -1605,89 +1720,111 @@ function NavigationPanel({
         { marginBottom: bottomInset + 12 },
       ]}
     >
-      <View style={styles.navigationHeader}>
-        <View style={styles.navigationContent}>
-          {isWalking && (
-            <View style={styles.walkingNavigationBadge}>
-              <MaterialIcons name="directions-walk" size={15} color="#D6FFF0" />
-              <Text style={styles.walkingNavigationBadgeText}>
-                YAYA NAVİGASYONU
+      {hasArrived ? (
+        <View style={styles.arrivalContent}>
+          <View style={styles.arrivalIcon}>
+            <MaterialIcons name="check" size={27} color="#075741" />
+          </View>
+          <Text style={styles.arrivalTitle}>Hedefe ulaştın</Text>
+          <Text style={styles.arrivalSummary}>
+            {formatDistance(completedDistance)} yol katettin
+          </Text>
+          <Pressable style={styles.finishNavigationButton} onPress={onEnd}>
+            <MaterialIcons name="check-circle" size={19} color={colors.white} />
+            <Text style={styles.finishNavigationButtonText}>
+              Navigasyonu bitir
+            </Text>
+          </Pressable>
+          <Pressable style={styles.newRouteButton} onPress={onNewRoute}>
+            <Text style={styles.newRouteButtonText}>Yeni rota ara</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <>
+          <View style={styles.navigationHeader}>
+            <View style={styles.navigationContent}>
+              {isWalking && (
+                <View style={styles.walkingNavigationBadge}>
+                  <MaterialIcons name="directions-walk" size={15} color="#D6FFF0" />
+                  <Text style={styles.walkingNavigationBadgeText}>
+                    YAYA NAVİGASYONU
+                  </Text>
+                </View>
+              )}
+              <Text style={styles.etaLabel}>VARIŞ</Text>
+              <Text style={styles.etaValue}>{estimatedArrival}</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Rota seçeneklerini göster"
+              style={styles.routeChangeControl}
+              onPress={onChangeRoute}
+            >
+              <MaterialIcons name="alt-route" size={23} color={colors.white} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel={
+                isVoiceGuidanceEnabled
+                  ? 'Sesli yönlendirmeyi kapat'
+                  : 'Sesli yönlendirmeyi aç'
+              }
+              accessibilityRole="switch"
+              accessibilityState={{ checked: isVoiceGuidanceEnabled }}
+              style={[
+                styles.voiceControl,
+                isVoiceGuidanceEnabled && styles.voiceControlActive,
+              ]}
+              onPress={onToggleVoiceGuidance}
+            >
+              <MaterialIcons
+                name={isVoiceGuidanceEnabled ? 'volume-up' : 'volume-off'}
+                size={21}
+                color={colors.white}
+              />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Navigasyon seçenekleri"
+              style={styles.navigationMenuButton}
+              onPress={onShowOptions}
+            >
+              <MaterialIcons name="more-horiz" size={25} color={colors.white} />
+            </Pressable>
+          </View>
+          <View style={styles.navigationMetrics}>
+            <Text style={styles.navMetric}>{formatDuration(remainingDuration)}</Text>
+            <View style={styles.metricDivider} />
+            <Text style={styles.navMetric}>{formatDistance(remainingDistance)}</Text>
+          </View>
+          <View style={styles.progressLabels}>
+            <Text style={styles.progressLabel}>
+              Gidilen {formatDistance(traveledDistance)}
+            </Text>
+            <Text style={styles.progressLabel}>Rota %{Math.round(routeProgress)}</Text>
+          </View>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, progressFillStyle]} />
+          </View>
+          {__DEV__ && isDemoDriving && (
+            <View style={styles.demoControls}>
+              <Text style={styles.demoIndicator}>
+                {isDemoRerouting ? 'Rota güncelleniyor' : 'Demo sürüşü açık'}
               </Text>
+              <Pressable
+                accessibilityLabel="Rota sapmasını test et"
+                disabled={isDemoRerouting}
+                style={[
+                  styles.demoRerouteButton,
+                  isDemoRerouting && styles.buttonDisabled,
+                ]}
+                onPress={onDemoReroute}
+              >
+                <MaterialIcons name="alt-route" size={16} color={colors.white} />
+                <Text style={styles.demoRerouteButtonText}>
+                  {isDemoRerouting ? 'Çiziliyor' : 'Sapmayı dene'}
+                </Text>
+              </Pressable>
             </View>
           )}
-          <Text style={styles.navMetric}>
-            {formatDistance(summary.length)} ·{' '}
-            {formatDuration(summary.duration)}
-          </Text>
-        </View>
-        <Pressable
-          accessibilityLabel={
-            isVoiceGuidanceEnabled
-              ? 'Sesli yönlendirmeyi kapat'
-              : 'Sesli yönlendirmeyi aç'
-          }
-          accessibilityRole="switch"
-          accessibilityState={{ checked: isVoiceGuidanceEnabled }}
-          style={styles.voiceControl}
-          onPress={onToggleVoiceGuidance}
-        >
-          <MaterialIcons
-            name={isVoiceGuidanceEnabled ? 'volume-up' : 'volume-off'}
-            size={22}
-            color={colors.white}
-          />
-        </Pressable>
-        <Pressable
-          accessibilityLabel="Rota seçeneklerine dön"
-          style={styles.routeChangeControl}
-          onPress={onChangeRoute}
-        >
-          <MaterialIcons name="alt-route" size={23} color={colors.white} />
-        </Pressable>
-        {__DEV__ && (
-          <Pressable style={styles.demoDrive} onPress={onToggleDemoDrive}>
-            <Text style={styles.demoDriveText}>
-              {isDemoDriving ? 'Durdur' : 'Demo'}
-            </Text>
-          </Pressable>
-        )}
-        {__DEV__ && (isDemoDriving || isDemoRerouting) && (
-          <Pressable
-            accessibilityLabel="Rota sapmasını test et"
-            disabled={!isDemoDriving || isDemoRerouting}
-            style={[styles.demoReroute, isDemoRerouting && styles.demoDisabled]}
-            onPress={onDemoReroute}
-          >
-            <Text style={styles.demoDriveText}>
-              {isDemoRerouting ? 'Çiziliyor' : 'Sapma'}
-            </Text>
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityLabel="Navigasyonu bitir"
-          style={styles.end}
-          onPress={onEnd}
-        >
-          <MaterialIcons name="close" size={25} color={colors.white} />
-        </Pressable>
-      </View>
-      <View style={styles.progressLabels}>
-        <Text style={styles.progressLabel}>
-          Gidilen {formatDistance(traveledDistance)}
-        </Text>
-        <Text style={styles.progressLabel}>
-          Kalan {formatDistance(remainingDistance)}
-        </Text>
-      </View>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, progressFillStyle]} />
-      </View>
-      {hasArrived && (
-        <Pressable style={styles.finishNavigationButton} onPress={onEnd}>
-          <Text style={styles.finishNavigationButtonText}>
-            Navigasyonu bitir
-          </Text>
-        </Pressable>
+        </>
       )}
     </View>
   );
@@ -1717,17 +1854,27 @@ function ManeuverCard({
       ]}
     >
       <View style={styles.maneuverPrimaryRow}>
-        <MaterialIcons
-          name={iconName}
-          size={34}
-          color={colors.white}
-          style={styles.maneuverIcon}
-        />
-        <Text style={styles.maneuverDistance}>{formatDistance(distance)}</Text>
+        <View style={styles.maneuverIconSurface}>
+          <MaterialIcons
+            name={iconName}
+            size={30}
+            color={isWalking ? '#075741' : '#1667FF'}
+          />
+        </View>
+        <View style={styles.maneuverCopy}>
+          <Text style={styles.maneuverDistance}>
+            {distance > 0 ? `${formatDistance(distance)} sonra` : 'Şimdi'}
+          </Text>
+          <Text numberOfLines={1} style={styles.maneuverMessage}>
+            {message}
+          </Text>
+        </View>
       </View>
-      <Text numberOfLines={1} style={styles.maneuverStreet}>
-        {streetName ?? message}
-      </Text>
+      {streetName && (
+        <Text numberOfLines={1} style={styles.maneuverStreet}>
+          {streetName}
+        </Text>
+      )}
     </View>
   );
 }
@@ -1832,20 +1979,40 @@ const styles = StyleSheet.create({
   maneuverCard: {
     position: 'absolute',
     left: 22,
-    width: 170,
-    padding: 12,
-    backgroundColor: '#2168F4',
-    borderRadius: 16,
+    width: 244,
+    padding: 13,
+    backgroundColor: '#1667FF',
+    borderRadius: 18,
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 5,
   },
   walkingManeuverCard: { backgroundColor: '#0E8062' },
-  maneuverIcon: { width: 34, textAlign: 'center' },
-  maneuverPrimaryRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  maneuverDistance: { fontSize: 28, color: colors.white, fontWeight: '800' },
-  maneuverStreet: {
-    fontSize: 16,
-    color: colors.white,
+  maneuverPrimaryRow: { flexDirection: 'row', alignItems: 'center' },
+  maneuverIconSurface: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
+  },
+  maneuverCopy: { flex: 1, minWidth: 0 },
+  maneuverDistance: { fontSize: 17, color: colors.white, fontWeight: '900' },
+  maneuverMessage: {
+    color: '#E9F0FF',
+    fontSize: 13,
     fontWeight: '700',
-    marginTop: 6,
+    marginTop: 2,
+  },
+  maneuverStreet: {
+    fontSize: 13,
+    color: '#D9E5FF',
+    fontWeight: '700',
+    marginTop: 9,
+    marginLeft: 57,
   },
   homePanel: {
     backgroundColor: colors.surface,
@@ -2113,6 +2280,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 15,
   },
+  buttonDisabled: { opacity: 0.55 },
   primaryButtonText: { color: colors.white, fontWeight: '800', fontSize: 16 },
   routeOrigin: { color: colors.textMuted, fontSize: 12, textAlign: 'center' },
   routeTo: {
@@ -2145,6 +2313,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.8,
     marginTop: 18,
+  },
+  routeModeUpdating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 12,
+  },
+  routeModeUpdatingText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
   },
   routeOptions: { flexDirection: 'row', gap: 8, marginTop: 9 },
   routeOption: {
@@ -2213,9 +2392,9 @@ const styles = StyleSheet.create({
   delayTextSelected: { color: '#FFE0D9' },
   navigationPanel: {
     margin: 14,
-    borderRadius: 20,
+    borderRadius: 24,
     backgroundColor: '#17191D',
-    paddingVertical: 18,
+    paddingVertical: 16,
     paddingHorizontal: 18,
   },
   walkingNavigationPanel: { backgroundColor: '#075741' },
@@ -2241,7 +2420,59 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.5,
   },
+  etaLabel: {
+    color: '#9CA1AA',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  etaValue: {
+    color: colors.white,
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.6,
+    marginTop: 1,
+  },
+  navigationMenuButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeChangeControl: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  voiceControl: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  voiceControlActive: { backgroundColor: '#2168F4' },
+  navigationMetrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 11,
+  },
   navMetric: { color: colors.white, fontWeight: '800', fontSize: 17 },
+  metricDivider: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#747982',
+    marginHorizontal: 9,
+  },
   progressLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2261,6 +2492,31 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.primary,
   },
+  demoControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  demoIndicator: {
+    color: '#AFC9FF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  demoRerouteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#E67817',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  demoRerouteButtonText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '800',
+  },
   trafficStatus: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -2275,10 +2531,14 @@ const styles = StyleSheet.create({
   trafficStatusClear: { backgroundColor: '#15735B' },
   trafficStatusText: { color: colors.white, fontSize: 12, fontWeight: '800' },
   finishNavigationButton: {
-    marginTop: 14,
+    alignSelf: 'stretch',
+    marginTop: 18,
     borderRadius: 14,
     backgroundColor: colors.primary,
+    flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 13,
   },
   finishNavigationButtonText: {
@@ -2286,53 +2546,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
-  voiceControl: {
-    width: 45,
-    height: 45,
-    marginLeft: 12,
-    marginRight: 8,
-    borderRadius: 14,
-    backgroundColor: colors.surfaceElevated,
+  arrivalContent: { alignItems: 'center', paddingTop: 4 },
+  arrivalIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#C8F5E3',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  routeChangeControl: {
-    width: 45,
-    height: 45,
-    marginRight: 8,
-    borderRadius: 14,
-    backgroundColor: colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
+  arrivalTitle: {
+    color: colors.white,
+    fontSize: 22,
+    fontWeight: '900',
+    marginTop: 10,
   },
-  demoDrive: {
-    minWidth: 58,
-    height: 45,
-    marginRight: 8,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    backgroundColor: colors.primary,
+  arrivalSummary: { color: colors.textMuted, fontSize: 14, marginTop: 4 },
+  newRouteButton: {
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 4,
   },
-  demoReroute: {
-    minWidth: 64,
-    height: 45,
-    marginRight: 8,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    backgroundColor: '#E67817',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  demoDisabled: { opacity: 0.6 },
-  demoDriveText: { color: colors.white, fontSize: 12, fontWeight: '800' },
-  end: {
-    width: 45,
-    height: 45,
-    borderRadius: 14,
-    backgroundColor: colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
+  newRouteButtonText: {
+    color: '#AFC9FF',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });
