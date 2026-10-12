@@ -2,6 +2,7 @@ import {
   Camera,
   GeoJSONSource,
   Layer,
+  LogManager,
   Map,
   Marker,
   type CameraRef,
@@ -19,10 +20,19 @@ import type {
   TravelMode,
 } from '../domain/types';
 import {
-  routeDirectionMarkers,
   routeToGeoJson,
   splitRouteAtOffset,
 } from '../utils/geo';
+
+// A tile can be retried by MapLibre after a transient connection interruption.
+// Treating that recoverable event as console.error makes React Native's dev
+// overlay interrupt navigation, particularly when a wide route needs many
+// tiles. Keep all other native map errors visible.
+LogManager?.onLog(({ message }) =>
+  !/failed to load tile|network connection was lost|network error|timed out/i.test(
+    message,
+  ),
+);
 
 const navigationArrow = require('../../../../assets/navigation-arrow.png');
 const destinationPin = require('../../../../assets/destination-pin.png');
@@ -98,10 +108,6 @@ export function MapCanvas({
   const remainingRouteGeoJson = useMemo(
     () => routeToGeoJson(routeSegments.remaining),
     [routeSegments.remaining],
-  );
-  const routeDirectionGeoJson = useMemo(
-    () => routeDirectionMarkers(route),
-    [route],
   );
   const trafficRouteGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.LineString>>(
     () => ({
@@ -320,37 +326,6 @@ export function MapCanvas({
             )}
           </GeoJSONSource>
         </>
-      )}
-      {routeDirectionGeoJson.features.length > 0 && !isWalking && (
-        <GeoJSONSource id="route-direction-source" data={routeDirectionGeoJson}>
-          <Layer
-            id="route-direction-arrows"
-            type="symbol"
-            layout={{
-              'text-field': '↑',
-              // OpenFreeMap publishes Noto Sans glyphs. Leaving this unset
-              // makes MapLibre request its Open Sans/Arial fallback, which
-              // the tile server does not provide and logs an error on both
-              // iOS and Android.
-              'text-font': ['Noto Sans Regular'],
-              'text-size': 17,
-              // Route bearings are north-based, just like MapLibre symbol
-              // rotation. Keeping the alignment on the map makes the arrows
-              // follow the road when the navigation camera rotates.
-              'text-rotate': ['get', 'bearing'],
-              'text-rotation-alignment': 'map',
-              'text-pitch-alignment': 'map',
-              'text-allow-overlap': true,
-              'text-ignore-placement': true,
-            }}
-            paint={{
-              'text-color': '#FFFFFF',
-              'text-halo-color': '#1667FF',
-              'text-halo-width': 1.5,
-              'text-halo-blur': 0.4,
-            }}
-          />
-        </GeoJSONSource>
       )}
       {trafficRouteGeoJson.features.length > 0 && (
         <GeoJSONSource

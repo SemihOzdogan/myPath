@@ -15,6 +15,10 @@ function usesNativeNavigationSpeech() {
   return Platform.OS === 'ios' && Boolean(nativeNavigationSpeech);
 }
 
+function usesAndroidNavigationService() {
+  return Platform.OS === 'android' && Boolean(NativeModules.NavigationForegroundModule);
+}
+
 let isInitialized = false;
 let speechGeneration = 0;
 let isSpeechEnabled = true;
@@ -113,6 +117,7 @@ export async function speakNavigationInstruction(
   message: string,
   distance: string,
 ) {
+  if (usesAndroidNavigationService()) return;
   if (!isSpeechEnabled) return;
   const generation = speechGeneration;
   try {
@@ -130,6 +135,7 @@ export async function speakNavigationInstruction(
 }
 
 export async function speakNavigationArrival() {
+  if (usesAndroidNavigationService()) return;
   if (!isSpeechEnabled) return;
   const generation = speechGeneration;
   try {

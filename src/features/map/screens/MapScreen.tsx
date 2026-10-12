@@ -55,6 +55,10 @@ import {
   updateNavigationLiveActivity,
 } from '../services/navigationLiveActivity';
 import {
+  startNavigationBackgroundService,
+  stopNavigationBackgroundService,
+} from '../services/navigationBackground';
+import {
   bearingBetween,
   coordinateAtRouteOffset,
   distanceToRouteInMeters,
@@ -133,6 +137,10 @@ export function MapScreen() {
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
   const [routePreview, setRoutePreview] = useState<RouteSummary | null>(null);
   const [isRoutePreviewLoading, setIsRoutePreviewLoading] = useState(false);
+  const [isBuildingRoute, setIsBuildingRoute] = useState(false);
+  const [distanceBeforeCurrentRoute, setDistanceBeforeCurrentRoute] =
+    useState(0);
+  const [navigationTotalDistance, setNavigationTotalDistance] = useState(0);
   const [isRouteModeChanging, setIsRouteModeChanging] = useState(false);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [travelMode, setTravelMode] = useState<TravelMode>('car');
@@ -180,19 +188,26 @@ export function MapScreen() {
       );
     return road?.streetName ?? road?.roadNumber;
   }, [currentRoutePointIndex, route]);
-  const traveledDistance = useMemo(() => {
+  const routeTraveledDistance = useMemo(() => {
     if (!route || !summary) return 0;
     return Math.min(
       summary.length,
       routeProgressInMeters(navigationPosition, route.coordinates),
     );
   }, [navigationPosition, route, summary]);
+  // A reroute begins at the current position, so its local route progress
+  // starts at zero. Keep the already covered distance separately for the
+  // navigation card and Live Activity.
+  const traveledDistance = distanceBeforeCurrentRoute + routeTraveledDistance;
   const remainingDistance = Math.max(
     0,
-    (summary?.length ?? 0) - traveledDistance,
+    (summary?.length ?? 0) - routeTraveledDistance,
   );
-  const routeProgress = summary?.length
-    ? (traveledDistance / summary.length) * 100
+  const currentRouteProgress = summary?.length
+    ? (routeTraveledDistance / summary.length) * 100
+    : 0;
+  const routeProgress = navigationTotalDistance
+    ? (traveledDistance / navigationTotalDistance) * 100
     : 0;
   const remainingDuration = summary?.length
     ? summary.duration * (remainingDistance / summary.length)
@@ -242,6 +257,7 @@ export function MapScreen() {
   useEffect(
     () => () => {
       stopNavigationSpeech();
+      stopNavigationBackgroundService().catch(() => undefined);
       endNavigationLiveActivity().catch(() => undefined);
       if (demoDriveTimerRef.current) clearInterval(demoDriveTimerRef.current);
     },
@@ -299,7 +315,7 @@ export function MapScreen() {
     const distanceStep = travelMode === 'pedestrian' ? 10 : 50;
     const roundedDistance =
       Math.round(remainingDistance / distanceStep) * distanceStep;
-    const progress = Math.min(1, Math.max(0, routeProgress / 100));
+    const progress = Math.min(1, Math.max(0, currentRouteProgress / 100));
     const eta = arrivalTime(summary.duration * (1 - progress));
     const updateKey = `${instruction}-${roundedDistance}-${hasArrived}`;
     if (liveActivityUpdateRef.current === updateKey) return;
@@ -322,7 +338,7 @@ export function MapScreen() {
     isNavigating,
     navigationInstruction,
     remainingDistance,
-    routeProgress,
+    currentRouteProgress,
     summary,
     travelMode,
     traveledDistance,
@@ -385,6 +401,12 @@ export function MapScreen() {
           return;
 
         spokenInstructionRef.current = null;
+        const completedDistance =
+          distanceBeforeCurrentRoute + routeTraveledDistance;
+        setDistanceBeforeCurrentRoute(completedDistance);
+        setNavigationTotalDistance(
+          completedDistance + options[0].summary.length,
+        );
         setRouteOptions(options);
         setSelectedRouteIndex(0);
         return options;
@@ -392,7 +414,13 @@ export function MapScreen() {
         // Keep the last valid route visible when a transient request fails.
       }
     },
-    [destination, isNavigating, travelMode],
+    [
+      destination,
+      distanceBeforeCurrentRoute,
+      isNavigating,
+      routeTraveledDistance,
+      travelMode,
+    ],
   );
 
   useEffect(() => {
@@ -580,7 +608,8 @@ export function MapScreen() {
     });
   }
   async function buildRoute() {
-    if (!destination) return;
+    if (!destination || isBuildingRoute) return;
+    setIsBuildingRoute(true);
     try {
       const options = await calculateRoutes(
         TOMTOM_API_KEY,
@@ -598,6 +627,8 @@ export function MapScreen() {
         'Rota oluşturulamadı',
         'TomTom anahtarını, kotanı ve internet bağlantını kontrol et.',
       );
+    } finally {
+      setIsBuildingRoute(false);
     }
   }
   function changeTravelMode(mode: TravelMode) {
@@ -671,6 +702,8 @@ export function MapScreen() {
     rerouteRequestRef.current += 1;
     lastRerouteAtRef.current = 0;
     navigationZoomRef.current = NAVIGATION_ZOOM;
+    setDistanceBeforeCurrentRoute(0);
+    setNavigationTotalDistance(summary?.length ?? 0);
     setNavigationPosition(routeStart);
     lastNavigationPositionRef.current = routeStart;
     spokenInstructionRef.current = null;
@@ -697,6 +730,7 @@ export function MapScreen() {
       enableNavigationSpeech();
       speakNavigationStart().catch(() => undefined);
     }
+    startNavigationBackgroundService(route.coordinates, route.instructions).catch(() => undefined);
     cameraRef.current?.flyTo({
       center: routeStart,
       zoom: NAVIGATION_ZOOM,
@@ -733,6 +767,7 @@ export function MapScreen() {
     setResults([]);
     setIsSearchOpen(false);
     stopNavigationSpeech();
+    stopNavigationBackgroundService().catch(() => undefined);
     liveActivityUpdateRef.current = null;
     endNavigationLiveActivity().catch(() => undefined);
     cameraRef.current?.flyTo({
@@ -786,7 +821,7 @@ export function MapScreen() {
     }
     const nextCoordinate = coordinateAtRouteOffset(
       route.coordinates,
-      Math.min(summary.length, traveledDistance + 25),
+      Math.min(summary.length, routeTraveledDistance + 25),
     );
     navigationZoomRef.current = NAVIGATION_ZOOM;
     cameraRef.current?.flyTo({
@@ -827,10 +862,14 @@ export function MapScreen() {
     }
     isDemoPositionOverrideRef.current = false;
     setIsDemoDriving(false);
+    if (route) {
+      startNavigationBackgroundService(route.coordinates, route.instructions).catch(() => undefined);
+    }
     if (shouldStopSpeech) stopNavigationSpeech();
   }
   function startDemoDrive(option: RouteOption) {
     if (option.summary.length <= 0) return;
+    startNavigationBackgroundService(option.coordinates, option.instructions, true).catch(() => undefined);
 
     const offsetStep = option.summary.length / DEMO_DRIVE_STEP_COUNT;
     let offset = 0;
@@ -893,7 +932,7 @@ export function MapScreen() {
     }
     const routePoint = coordinateAtRouteOffset(
       route.coordinates,
-      Math.min(summary.length, traveledDistance + 80),
+      Math.min(summary.length, routeTraveledDistance + 80),
     );
     const latitudeOffset = DEMO_REROUTE_OFFSET_METERS / 110_540;
     const longitudeOffset =
@@ -999,7 +1038,7 @@ export function MapScreen() {
         hasArrived={hasArrived}
         travelMode={travelMode}
         navigationPosition={navigationPosition}
-        traveledDistance={traveledDistance}
+        traveledDistance={routeTraveledDistance}
         trafficSections={route?.trafficSections ?? []}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
@@ -1147,6 +1186,7 @@ export function MapScreen() {
               travelMode={travelMode}
               routePreview={routePreview}
               isRoutePreviewLoading={isRoutePreviewLoading}
+              isBuildingRoute={isBuildingRoute}
               bottomInset={insets.bottom}
               onTravelModeChange={changeTravelMode}
               onRoute={() => {
@@ -1370,6 +1410,7 @@ function PlacePanel({
   travelMode,
   routePreview,
   isRoutePreviewLoading,
+  isBuildingRoute,
   bottomInset,
   onRoute,
   onTravelModeChange,
@@ -1378,6 +1419,7 @@ function PlacePanel({
   travelMode: TravelMode;
   routePreview: RouteSummary | null;
   isRoutePreviewLoading: boolean;
+  isBuildingRoute: boolean;
   bottomInset: number;
   onRoute: () => void;
   onTravelModeChange: (mode: TravelMode) => void;
@@ -1443,9 +1485,22 @@ function PlacePanel({
           ? 'Tek yönler ve dönüş yasakları dikkate alınarak rota hesaplanır.'
           : 'Yaya yollarını kullanarak en uygun rotayı bulabilirsin.'}
       </Text>
-      <Pressable style={styles.routeCreationButton} onPress={onRoute}>
-        <MaterialIcons name="alt-route" size={22} color={colors.white} />
-        <Text style={styles.primaryButtonText}>Rota oluştur</Text>
+      <Pressable
+        disabled={isBuildingRoute}
+        style={[
+          styles.routeCreationButton,
+          isBuildingRoute && styles.buttonDisabled,
+        ]}
+        onPress={onRoute}
+      >
+        {isBuildingRoute ? (
+          <ActivityIndicator color={colors.white} />
+        ) : (
+          <MaterialIcons name="alt-route" size={22} color={colors.white} />
+        )}
+        <Text style={styles.primaryButtonText}>
+          {isBuildingRoute ? 'Rota hesaplanıyor...' : 'Rota oluştur'}
+        </Text>
       </Pressable>
     </DraggableSheet>
   );
@@ -1706,7 +1761,7 @@ function NavigationPanel({
   travelMode: TravelMode;
 }) {
   const isWalking = travelMode === 'pedestrian';
-  const completedDistance = hasArrived ? summary.length : traveledDistance;
+  const completedDistance = traveledDistance;
   const progressFillStyle = useMemo(
     () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
     [routeProgress],

@@ -84,59 +84,6 @@ export function coordinateAtRouteOffset(
   return coordinates[coordinates.length - 1];
 }
 
-/**
- * Creates evenly spaced, forward-facing markers for the route line. These are
- * visual direction cues: the routing provider has already applied road rules
- * such as one-way streets and forbidden turns to the coordinate sequence.
- */
-export function routeDirectionMarkers(
-  coordinates: Coordinate[],
-  spacingInMeters = 85,
-): GeoJSON.FeatureCollection<GeoJSON.Point> {
-  if (coordinates.length < 2) {
-    return { type: 'FeatureCollection', features: [] };
-  }
-
-  const cumulativeDistances = [0];
-  for (let index = 1; index < coordinates.length; index += 1) {
-    cumulativeDistances.push(
-      cumulativeDistances[index - 1] +
-        distanceInMeters(coordinates[index - 1], coordinates[index]),
-    );
-  }
-
-  const routeLength = cumulativeDistances[cumulativeDistances.length - 1];
-  // Avoid putting an arrow directly on the origin/destination pins.
-  const firstOffset = Math.min(spacingInMeters / 2, routeLength / 2);
-  const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-
-  for (
-    let offset = firstOffset;
-    offset < routeLength - spacingInMeters / 3;
-    offset += spacingInMeters
-  ) {
-    let segmentIndex = 1;
-    while (
-      segmentIndex < cumulativeDistances.length &&
-      cumulativeDistances[segmentIndex] < offset
-    ) {
-      segmentIndex += 1;
-    }
-    const start = coordinates[segmentIndex - 1];
-    const end = coordinates[segmentIndex] ?? start;
-    features.push({
-      type: 'Feature',
-      properties: { bearing: bearingBetween(start, end) },
-      geometry: {
-        type: 'Point',
-        coordinates: coordinateAtRouteOffset(coordinates, offset),
-      },
-    });
-  }
-
-  return { type: 'FeatureCollection', features };
-}
-
 /** Splits a route at the travelled distance so it can be styled as passed/remaining. */
 export function splitRouteAtOffset(
   coordinates: Coordinate[],
