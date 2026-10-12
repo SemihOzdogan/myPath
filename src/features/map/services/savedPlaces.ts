@@ -7,7 +7,10 @@ const MAX_SAVED_PLACES = 12;
 export type SavedPlace = Place & {
   id: string;
   savedAt: number;
+  labelType?: SavedPlaceLabel;
 };
+
+export type SavedPlaceLabel = 'home' | 'work' | 'favorite';
 
 function placeId(place: Place) {
   return `${place.coordinate[0].toFixed(6)}-${place.coordinate[1].toFixed(6)}`;
@@ -38,8 +41,9 @@ export async function loadSavedPlaces(): Promise<SavedPlace[]> {
 export async function savePlace(place: Place): Promise<SavedPlace[]> {
   const savedPlace = toSavedPlace(place);
   const current = await loadSavedPlaces();
+  const existing = current.find(item => item.id === savedPlace.id);
   const next = [
-    savedPlace,
+    { ...savedPlace, labelType: existing?.labelType },
     ...current.filter(item => item.id !== savedPlace.id),
   ].slice(0, MAX_SAVED_PLACES);
   await AsyncStorage.setItem(SAVED_PLACES_KEY, JSON.stringify(next));
@@ -48,6 +52,17 @@ export async function savePlace(place: Place): Promise<SavedPlace[]> {
 
 export async function removeSavedPlace(id: string): Promise<SavedPlace[]> {
   const next = (await loadSavedPlaces()).filter(place => place.id !== id);
+  await AsyncStorage.setItem(SAVED_PLACES_KEY, JSON.stringify(next));
+  return next;
+}
+
+export async function updateSavedPlaceLabel(
+  id: string,
+  labelType?: SavedPlaceLabel,
+): Promise<SavedPlace[]> {
+  const next = (await loadSavedPlaces()).map(place =>
+    place.id === id ? { ...place, labelType } : place,
+  );
   await AsyncStorage.setItem(SAVED_PLACES_KEY, JSON.stringify(next));
   return next;
 }

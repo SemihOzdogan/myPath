@@ -16,6 +16,8 @@
 		A10000000000000000000015 /* NavigationLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* NavigationLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B20000000000000000000001 /* NavigationSpeechModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* NavigationSpeechModule.swift */; };
 		B20000000000000000000002 /* NavigationSpeechModule.m in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* NavigationSpeechModule.m */; };
+		C30000000000000000000001 /* NavigationScreenModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000003 /* NavigationScreenModule.swift */; };
+		C30000000000000000000002 /* NavigationScreenModule.m in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000004 /* NavigationScreenModule.m */; };
 		F610318F307835A300F570A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F610318D307835A300F570A9 /* PrivacyInfo.xcprivacy */; };
 		F6103190307835A300F570A9 /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F610318A307835A300F570A9 /* Images.xcassets */; };
 		F6103191307835A300F570A9 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F610318C307835A300F570A9 /* LaunchScreen.storyboard */; };
@@ -61,6 +63,8 @@
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B20000000000000000000003 /* NavigationSpeechModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationSpeechModule.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* NavigationSpeechModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NavigationSpeechModule.m; sourceTree = "<group>"; };
+		C30000000000000000000003 /* NavigationScreenModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationScreenModule.swift; sourceTree = "<group>"; };
+		C30000000000000000000004 /* NavigationScreenModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NavigationScreenModule.m; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F6103189307835A300F570A9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		F610318A307835A300F570A9 /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Images.xcassets; sourceTree = "<group>"; };
@@ -162,6 +166,8 @@
 				A10000000000000000000005 /* LiveActivityModule.m */,
 				B20000000000000000000003 /* NavigationSpeechModule.swift */,
 				B20000000000000000000004 /* NavigationSpeechModule.m */,
+				C30000000000000000000003 /* NavigationScreenModule.swift */,
+				C30000000000000000000004 /* NavigationScreenModule.m */,
 			);
 			path = myPath;
 			sourceTree = "<group>";
@@ -375,6 +381,8 @@
 				A10000000000000000000012 /* LiveActivityModule.m in Sources */,
 				B20000000000000000000001 /* NavigationSpeechModule.swift in Sources */,
 				B20000000000000000000002 /* NavigationSpeechModule.m in Sources */,
+				C30000000000000000000001 /* NavigationScreenModule.swift in Sources */,
+				C30000000000000000000002 /* NavigationScreenModule.m in Sources */,
 				F6103193307835A300F570A9 /* AppDelegate.swift in Sources */,
 				F610319730783C5400F570A9 /* SceneDelegate.swift in Sources */,
 			);

@@ -19,19 +19,17 @@ import type {
   RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
-import {
-  routeToGeoJson,
-  splitRouteAtOffset,
-} from '../utils/geo';
+import { routeToGeoJson, splitRouteAtOffset } from '../utils/geo';
 
 // A tile can be retried by MapLibre after a transient connection interruption.
 // Treating that recoverable event as console.error makes React Native's dev
 // overlay interrupt navigation, particularly when a wide route needs many
 // tiles. Keep all other native map errors visible.
-LogManager?.onLog(({ message }) =>
-  !/failed to load tile|network connection was lost|network error|timed out/i.test(
-    message,
-  ),
+LogManager?.onLog(
+  ({ message }) =>
+    !/failed to load tile|network connection was lost|network error|timed out/i.test(
+      message,
+    ),
 );
 
 const navigationArrow = require('../../../../assets/navigation-arrow.png');
@@ -109,7 +107,9 @@ export function MapCanvas({
     () => routeToGeoJson(routeSegments.remaining),
     [routeSegments.remaining],
   );
-  const trafficRouteGeoJson = useMemo<GeoJSON.FeatureCollection<GeoJSON.LineString>>(
+  const trafficRouteGeoJson = useMemo<
+    GeoJSON.FeatureCollection<GeoJSON.LineString>
+  >(
     () => ({
       type: 'FeatureCollection',
       features: trafficSections.flatMap(section => {
@@ -287,7 +287,10 @@ export function MapCanvas({
               layout={routeLineLayout}
             />
           </GeoJSONSource>
-          <GeoJSONSource id="remaining-route-source" data={remainingRouteGeoJson}>
+          <GeoJSONSource
+            id="remaining-route-source"
+            data={remainingRouteGeoJson}
+          >
             <Layer
               id="remaining-route-outline"
               type="line"

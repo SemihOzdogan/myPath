@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class NavigationForegroundPackage : ReactPackage {
   override fun createNativeModules(context: ReactApplicationContext): List<NativeModule> =
-    listOf(NavigationForegroundModule(context))
+    listOf(NavigationForegroundModule(context), NavigationScreenModule(context))
 
   override fun createViewManagers(context: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
 }

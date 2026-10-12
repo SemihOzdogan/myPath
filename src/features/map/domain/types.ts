@@ -8,6 +8,7 @@ export type Place = {
   coordinate: Coordinate;
   imageUrl?: string;
   routeOptions?: RouteOption[];
+  isTemporary?: boolean;
 };
 
 export type RouteSummary = {

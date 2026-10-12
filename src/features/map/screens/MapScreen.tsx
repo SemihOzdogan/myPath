@@ -40,8 +40,15 @@ import {
   loadSavedPlaces,
   removeSavedPlace,
   savePlace,
+  updateSavedPlaceLabel,
   type SavedPlace,
+  type SavedPlaceLabel,
 } from '../services/savedPlaces';
+import {
+  loadParkedCar,
+  saveParkedCar,
+  type ParkedCar,
+} from '../services/parkedCar';
 import {
   enableNavigationSpeech,
   speakNavigationArrival,
@@ -58,9 +65,11 @@ import {
   startNavigationBackgroundService,
   stopNavigationBackgroundService,
 } from '../services/navigationBackground';
+import { setNavigationScreenAwake } from '../services/navigationScreen';
 import {
   bearingBetween,
   coordinateAtRouteOffset,
+  distanceInMeters,
   distanceToRouteInMeters,
   formatDistance,
   formatDuration,
@@ -99,6 +108,9 @@ const NAVIGATION_PITCH = 50;
 const REROUTE_DISTANCE_METERS = { car: 30, pedestrian: 20 } as const;
 const REROUTE_COOLDOWN_MS = 12_000;
 const DEMO_REROUTE_OFFSET_METERS = 60;
+const ARRIVAL_DISTANCE_METERS = { car: 15, pedestrian: 10 } as const;
+const ARRIVAL_CONFIRMATION_COUNT = 3;
+const MAX_ARRIVAL_LOCATION_ACCURACY_METERS = 25;
 
 function arrivalTime(seconds: number) {
   const time = new Date(Date.now() + Math.max(0, seconds) * 1_000);
@@ -125,6 +137,8 @@ export function MapScreen() {
   const rerouteRequestRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
   const navigationSessionRef = useRef(0);
+  const arrivalConfirmationRef = useRef(0);
+  const lastLocationAccuracyRef = useRef<number>(Number.POSITIVE_INFINITY);
   const isDemoPositionOverrideRef = useRef(false);
   const [origin, setOrigin] = useState<Coordinate>(ISTANBUL);
   const [destination, setDestination] = useState<Place | null>(null);
@@ -147,10 +161,12 @@ export function MapScreen() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [hasArrived, setHasArrived] = useState(false);
+  const [isArrivalReady, setIsArrivalReady] = useState(false);
   const [isVoiceGuidanceEnabled, setIsVoiceGuidanceEnabled] = useState(true);
   const [isDemoDriving, setIsDemoDriving] = useState(false);
   const [isDemoRerouting, setIsDemoRerouting] = useState(false);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [parkedCar, setParkedCar] = useState<ParkedCar | null>(null);
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
@@ -212,6 +228,9 @@ export function MapScreen() {
   const remainingDuration = summary?.length
     ? summary.duration * (remainingDistance / summary.length)
     : 0;
+  const distanceToDestination = destination
+    ? distanceInMeters(navigationPosition, destination.coordinate)
+    : Number.POSITIVE_INFINITY;
   const estimatedArrival = arrivalTime(remainingDuration).replace('Varış ', '');
   const navigationInstruction = useMemo(
     () =>
@@ -251,12 +270,21 @@ export function MapScreen() {
   }, []);
 
   useEffect(() => {
-    loadSavedPlaces().then(setSavedPlaces).catch(() => undefined);
+    loadSavedPlaces()
+      .then(setSavedPlaces)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadParkedCar()
+      .then(setParkedCar)
+      .catch(() => undefined);
   }, []);
 
   useEffect(
     () => () => {
       stopNavigationSpeech();
+      setNavigationScreenAwake(false).catch(() => undefined);
       stopNavigationBackgroundService().catch(() => undefined);
       endNavigationLiveActivity().catch(() => undefined);
       if (demoDriveTimerRef.current) clearInterval(demoDriveTimerRef.current);
@@ -295,16 +323,32 @@ export function MapScreen() {
   ]);
 
   useEffect(() => {
-    if (!isNavigating || hasArrived || remainingDistance > 20) return;
+    if (!isNavigating || hasArrived || !destination) return;
 
-    setHasArrived(true);
-    if (demoDriveTimerRef.current) {
-      clearInterval(demoDriveTimerRef.current);
-      demoDriveTimerRef.current = null;
+    const arrivalDistance = ARRIVAL_DISTANCE_METERS[travelMode];
+    const hasReachedDestination =
+      remainingDistance <= Math.max(20, arrivalDistance * 2) &&
+      distanceToDestination <= arrivalDistance &&
+      lastLocationAccuracyRef.current <= MAX_ARRIVAL_LOCATION_ACCURACY_METERS;
+    if (!hasReachedDestination) {
+      arrivalConfirmationRef.current = 0;
+      setIsArrivalReady(false);
+      return;
     }
-    setIsDemoDriving(false);
-    if (isVoiceGuidanceEnabled) speakNavigationArrival().catch(() => undefined);
-  }, [hasArrived, isNavigating, isVoiceGuidanceEnabled, remainingDistance]);
+
+    arrivalConfirmationRef.current += 1;
+    if (arrivalConfirmationRef.current < ARRIVAL_CONFIRMATION_COUNT) return;
+
+    setIsArrivalReady(true);
+  }, [
+    destination,
+    distanceToDestination,
+    hasArrived,
+    isNavigating,
+    isVoiceGuidanceEnabled,
+    remainingDistance,
+    travelMode,
+  ]);
 
   useEffect(() => {
     if (!isNavigating || !summary || !destination) return;
@@ -426,12 +470,7 @@ export function MapScreen() {
   useEffect(() => {
     // The development demo supplies its own positions. Do not let the device's
     // real GPS overwrite a simulated deviation or the new simulated route.
-    if (
-      !isNavigating ||
-      hasArrived ||
-      isDemoDriving ||
-      isDemoRerouting
-    )
+    if (!isNavigating || hasArrived || isDemoDriving || isDemoRerouting)
       return undefined;
     const watchId = Geolocation.watchPosition(
       position => {
@@ -440,6 +479,7 @@ export function MapScreen() {
           position.coords.longitude,
           position.coords.latitude,
         ];
+        lastLocationAccuracyRef.current = position.coords.accuracy;
         const distanceFromRoute = route
           ? distanceToRouteInMeters(coordinate, route.coordinates)
           : 0;
@@ -456,10 +496,7 @@ export function MapScreen() {
           compassHeadingRef.current ??
           (typeof reportedHeading === 'number' && reportedHeading >= 0
             ? reportedHeading
-            : bearingBetween(
-                lastNavigationPositionRef.current,
-                coordinate,
-              ));
+            : bearingBetween(lastNavigationPositionRef.current, coordinate));
         lastNavigationPositionRef.current = coordinate;
         setNavigationPosition(coordinate);
         cameraRef.current?.flyTo({
@@ -531,11 +568,14 @@ export function MapScreen() {
             buttonNegative: 'Şimdi değil',
           },
         );
-        if (permission !== PermissionsAndroid.RESULTS.GRANTED) return;
+        if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
+          return;
+        }
       } else if (
         (await Geolocation.requestAuthorization('whenInUse')) !== 'granted'
-      )
+      ) {
         return;
+      }
       Geolocation.getCurrentPosition(
         position => {
           const coordinate: Coordinate = [
@@ -551,8 +591,9 @@ export function MapScreen() {
             duration: 900,
           });
         },
-        () =>
-          Alert.alert('Konum alınamadı', 'Harita İstanbul merkezinden açıldı.'),
+        () => {
+          Alert.alert('Konum alınamadı', 'Harita İstanbul merkezinden açıldı.');
+        },
         { enableHighAccuracy: true, timeout: 12_000, maximumAge: 20_000 },
       );
     } finally {
@@ -571,6 +612,7 @@ export function MapScreen() {
     setSelectedRouteIndex(0);
     setIsNavigating(false);
     setHasArrived(false);
+    setIsArrivalReady(false);
   }
   function openSearch() {
     setQuery('');
@@ -621,7 +663,11 @@ export function MapScreen() {
       setRouteOptions(options);
       setSelectedRouteIndex(0);
       fitRoute(options[0]);
-      savePlace(destination).then(setSavedPlaces).catch(() => undefined);
+      if (!destination.isTemporary) {
+        savePlace(destination)
+          .then(setSavedPlaces)
+          .catch(() => undefined);
+      }
     } catch {
       Alert.alert(
         'Rota oluşturulamadı',
@@ -707,8 +753,12 @@ export function MapScreen() {
     setNavigationPosition(routeStart);
     lastNavigationPositionRef.current = routeStart;
     spokenInstructionRef.current = null;
+    arrivalConfirmationRef.current = 0;
+    lastLocationAccuracyRef.current = Number.POSITIVE_INFINITY;
     setHasArrived(false);
+    setIsArrivalReady(false);
     setIsNavigating(true);
+    setNavigationScreenAwake(true).catch(() => undefined);
     liveActivityUpdateRef.current = null;
     if (destination && summary) {
       startNavigationLiveActivity({
@@ -730,7 +780,10 @@ export function MapScreen() {
       enableNavigationSpeech();
       speakNavigationStart().catch(() => undefined);
     }
-    startNavigationBackgroundService(route.coordinates, route.instructions).catch(() => undefined);
+    startNavigationBackgroundService(
+      route.coordinates,
+      route.instructions,
+    ).catch(() => undefined);
     cameraRef.current?.flyTo({
       center: routeStart,
       zoom: NAVIGATION_ZOOM,
@@ -753,15 +806,34 @@ export function MapScreen() {
       ],
     );
   }
+  function completeArrival() {
+    setHasArrived(true);
+    setIsArrivalReady(false);
+    if (demoDriveTimerRef.current) {
+      clearInterval(demoDriveTimerRef.current);
+      demoDriveTimerRef.current = null;
+    }
+    setIsDemoDriving(false);
+    if (isVoiceGuidanceEnabled) speakNavigationArrival().catch(() => undefined);
+  }
   function stopNavigation(returnToRouteSelection = false) {
     stopDemoDrive();
     navigationSessionRef.current += 1;
     const sessionId = navigationSessionRef.current;
+    const shouldSaveParking = travelMode === 'car' && !returnToRouteSelection;
     rerouteRequestRef.current += 1;
     setIsNavigating(false);
+    setNavigationScreenAwake(false).catch(() => undefined);
     setHasArrived(false);
+    setIsArrivalReady(false);
+    arrivalConfirmationRef.current = 0;
     spokenInstructionRef.current = null;
     setOrigin(navigationPosition);
+    if (shouldSaveParking) {
+      saveParkedCar(navigationPosition)
+        .then(setParkedCar)
+        .catch(() => undefined);
+    }
     setSelectedRouteIndex(0);
     setQuery('');
     setResults([]);
@@ -834,7 +906,7 @@ export function MapScreen() {
   }
   function showNavigationOptions() {
     const options = [
-      ...( __DEV__
+      ...(__DEV__
         ? [
             {
               text: isDemoDriving ? 'Demo sürüşü durdur' : 'Demo sürüşü başlat',
@@ -863,13 +935,20 @@ export function MapScreen() {
     isDemoPositionOverrideRef.current = false;
     setIsDemoDriving(false);
     if (route) {
-      startNavigationBackgroundService(route.coordinates, route.instructions).catch(() => undefined);
+      startNavigationBackgroundService(
+        route.coordinates,
+        route.instructions,
+      ).catch(() => undefined);
     }
     if (shouldStopSpeech) stopNavigationSpeech();
   }
   function startDemoDrive(option: RouteOption) {
     if (option.summary.length <= 0) return;
-    startNavigationBackgroundService(option.coordinates, option.instructions, true).catch(() => undefined);
+    startNavigationBackgroundService(
+      option.coordinates,
+      option.instructions,
+      true,
+    ).catch(() => undefined);
 
     const offsetStep = option.summary.length / DEMO_DRIVE_STEP_COUNT;
     let offset = 0;
@@ -913,16 +992,13 @@ export function MapScreen() {
     isDemoPositionOverrideRef.current = true;
     setIsDemoDriving(true);
     moveAlongRoute();
-    demoDriveTimerRef.current = setInterval(moveAlongRoute, DEMO_DRIVE_INTERVAL);
+    demoDriveTimerRef.current = setInterval(
+      moveAlongRoute,
+      DEMO_DRIVE_INTERVAL,
+    );
   }
   async function triggerDemoReroute() {
-    if (
-      !route ||
-      !summary ||
-      !destination ||
-      !isNavigating ||
-      !isDemoDriving
-    )
+    if (!route || !summary || !destination || !isNavigating || !isDemoDriving)
       return;
 
     // Pause simulated movement but retain its state so real GPS stays disabled.
@@ -1118,34 +1194,65 @@ export function MapScreen() {
               {isLocating && !isNavigating ? (
                 <ActivityIndicator color={colors.background} />
               ) : isNavigating ? (
-                <MaterialIcons name="navigation" size={26} color={colors.background} />
+                <MaterialIcons
+                  name="navigation"
+                  size={26}
+                  color={colors.background}
+                />
               ) : (
                 <Image source={locationPin} style={locationPinStyle} />
               )}
             </Pressable>
+            {parkedCar && !destination && !isNavigating && (
+              <Pressable
+                accessibilityLabel="Aracıma git"
+                style={styles.goToCarButton}
+                onPress={() => {
+                  setTravelMode('pedestrian');
+                  chooseDestination({
+                    title: 'Park ettiğin araç',
+                    label: parkedCar.note || 'Park konumun',
+                    coordinate: parkedCar.coordinate,
+                    isTemporary: true,
+                  });
+                }}
+              >
+                <MaterialIcons
+                  name="directions-car"
+                  size={26}
+                  color={colors.white}
+                />
+              </Pressable>
+            )}
           </View>
         )}
         {isSearchOpen && !destination ? (
-        <SearchPanel
-          query={query}
-          results={results}
-          savedPlaces={savedPlaces}
-          loading={isSearching}
+          <SearchPanel
+            query={query}
+            results={results}
+            savedPlaces={savedPlaces}
+            loading={isSearching}
             bottomInset={insets.bottom}
             onChange={changeSearchQuery}
             onSearch={() => {
               submitSearch().catch(() => undefined);
             }}
-          onPick={chooseDestination}
-          onRemoveSaved={id => {
-            removeSavedPlace(id).then(setSavedPlaces).catch(() => undefined);
-          }}
+            onPick={chooseDestination}
+            onRemoveSaved={id => {
+              removeSavedPlace(id)
+                .then(setSavedPlaces)
+                .catch(() => undefined);
+            }}
+            onChangeSavedLabel={(id, labelType) => {
+              updateSavedPlaceLabel(id, labelType)
+                .then(setSavedPlaces)
+                .catch(() => undefined);
+            }}
             onClear={() => changeSearchQuery('')}
             onClose={closeSearch}
           />
         ) : isNavigating && summary ? (
           <NavigationPanel
-            summary={summary}
             bottomInset={insets.bottom}
             onEnd={hasArrived ? () => stopNavigation() : confirmStopNavigation}
             onChangeRoute={() => stopNavigation(true)}
@@ -1162,7 +1269,9 @@ export function MapScreen() {
             remainingDuration={remainingDuration}
             estimatedArrival={estimatedArrival}
             hasArrived={hasArrived}
+            isArrivalReady={isArrivalReady}
             travelMode={travelMode}
+            onCompleteArrival={completeArrival}
             onShowOptions={showNavigationOptions}
             onNewRoute={endNavigationAndSearch}
           />
@@ -1266,6 +1375,7 @@ function SearchPanel({
   onSearch,
   onPick,
   onRemoveSaved,
+  onChangeSavedLabel,
   onClear,
   onClose,
 }: {
@@ -1278,10 +1388,104 @@ function SearchPanel({
   onSearch: () => void;
   onPick: (place: Place) => void;
   onRemoveSaved: (id: string) => void;
+  onChangeSavedLabel: (id: string, labelType?: SavedPlaceLabel) => void;
   onClear: () => void;
   onClose: () => void;
 }) {
   const shouldShowSavedPlaces = !query.trim() && !loading;
+  const labeledPlaces = savedPlaces.filter(place => place.labelType);
+  const recentPlaces = savedPlaces.filter(place => !place.labelType);
+
+  function chooseSavedPlaceLabel(place: SavedPlace) {
+    Alert.alert('Yer etiketi', place.title, [
+      {
+        text: 'Ev',
+        onPress: () => onChangeSavedLabel(place.id, 'home'),
+      },
+      {
+        text: 'İş',
+        onPress: () => onChangeSavedLabel(place.id, 'work'),
+      },
+      {
+        text: 'Favori',
+        onPress: () => onChangeSavedLabel(place.id, 'favorite'),
+      },
+      ...(place.labelType
+        ? [
+            {
+              text: 'Etiketi kaldır',
+              onPress: () => onChangeSavedLabel(place.id),
+            },
+          ]
+        : []),
+      { text: 'Vazgeç', style: 'cancel' },
+    ]);
+  }
+
+  function savedPlaceIcon(place: SavedPlace) {
+    if (place.labelType === 'home') return 'home';
+    if (place.labelType === 'work') return 'business';
+    if (place.labelType === 'favorite') return 'star';
+    return 'history';
+  }
+
+  function savedPlaceLabel(place: SavedPlace) {
+    if (place.labelType === 'home') return 'EV';
+    if (place.labelType === 'work') return 'İŞ';
+    if (place.labelType === 'favorite') return 'FAVORİ';
+    return null;
+  }
+
+  function renderSavedPlace(place: SavedPlace) {
+    const label = savedPlaceLabel(place);
+    return (
+      <View key={place.id} style={styles.savedPlaceRow}>
+        <Pressable style={styles.savedPlacePick} onPress={() => onPick(place)}>
+          <View style={styles.savedPlaceIcon}>
+            <MaterialIcons
+              name={savedPlaceIcon(place)}
+              size={20}
+              color={colors.primary}
+            />
+          </View>
+          <View style={styles.savedPlaceCopy}>
+            <View style={styles.savedPlaceTitleRow}>
+              <Text numberOfLines={1} style={styles.resultTitle}>
+                {place.title}
+              </Text>
+              {label && <Text style={styles.savedPlaceTag}>{label}</Text>}
+            </View>
+            <Text numberOfLines={1} style={styles.resultLabel}>
+              {place.label}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`${place.title} etiketini değiştir`}
+          style={styles.savedPlaceLabelButton}
+          onPress={() => chooseSavedPlaceLabel(place)}
+        >
+          <MaterialIcons
+            name="label-outline"
+            size={21}
+            color={colors.textMuted}
+          />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`${place.title} kaydını sil`}
+          style={styles.deleteSavedPlace}
+          onPress={() => onRemoveSaved(place.id)}
+        >
+          <MaterialIcons
+            name="delete-outline"
+            size={22}
+            color={colors.textMuted}
+          />
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <DraggableSheet
       style={[
@@ -1341,7 +1545,11 @@ function SearchPanel({
           {loading ? (
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
-            <MaterialIcons name="arrow-forward" size={22} color={colors.white} />
+            <MaterialIcons
+              name="arrow-forward"
+              size={22}
+              color={colors.white}
+            />
           )}
         </Pressable>
       </View>
@@ -1371,34 +1579,25 @@ function SearchPanel({
           ))
         ) : shouldShowSavedPlaces && savedPlaces.length > 0 ? (
           <View style={styles.savedPlaces}>
-            <Text style={styles.savedPlacesTitle}>SON OLUŞTURULAN ROTALAR</Text>
-            {savedPlaces.map(place => (
-              <View key={place.id} style={styles.savedPlaceRow}>
-                <Pressable
-                  style={styles.savedPlacePick}
-                  onPress={() => onPick(place)}
+            {labeledPlaces.length > 0 && (
+              <>
+                <Text style={styles.savedPlacesTitle}>KAYITLI YERLER</Text>
+                {labeledPlaces.map(renderSavedPlace)}
+              </>
+            )}
+            {recentPlaces.length > 0 && (
+              <>
+                <Text
+                  style={[
+                    styles.savedPlacesTitle,
+                    labeledPlaces.length > 0 && styles.recentPlacesTitle,
+                  ]}
                 >
-                  <View style={styles.savedPlaceIcon}>
-                    <MaterialIcons name="history" size={20} color={colors.primary} />
-                  </View>
-                  <View style={styles.savedPlaceCopy}>
-                    <Text numberOfLines={1} style={styles.resultTitle}>
-                      {place.title}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.resultLabel}>
-                      {place.label}
-                    </Text>
-                  </View>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`${place.title} kaydını sil`}
-                  style={styles.deleteSavedPlace}
-                  onPress={() => onRemoveSaved(place.id)}
-                >
-                  <MaterialIcons name="delete-outline" size={22} color={colors.textMuted} />
-                </Pressable>
-              </View>
-            ))}
+                  SON OLUŞTURULAN ROTALAR
+                </Text>
+                {recentPlaces.map(renderSavedPlace)}
+              </>
+            )}
           </View>
         ) : null}
       </ScrollView>
@@ -1460,8 +1659,8 @@ function PlacePanel({
               {routePreview
                 ? formatDistance(routePreview.length)
                 : isRoutePreviewLoading
-                  ? 'Hesaplanıyor...'
-                  : 'Hesaplanamadı'}
+                ? 'Hesaplanıyor...'
+                : 'Hesaplanamadı'}
             </Text>
           </View>
         </View>
@@ -1474,8 +1673,8 @@ function PlacePanel({
               {routePreview
                 ? formatDuration(routePreview.duration)
                 : isRoutePreviewLoading
-                  ? 'Hesaplanıyor...'
-                  : 'Hesaplanamadı'}
+                ? 'Hesaplanıyor...'
+                : 'Hesaplanamadı'}
             </Text>
           </View>
         </View>
@@ -1636,22 +1835,29 @@ function RoutePanel({
                   </Text>
                 )}
               </View>
-              {travelMode === 'car' && Boolean(
-                option.summary.tollRoadLength || option.summary.hasTollRoad,
-              ) && (
-                <Text
-                  style={[tollLabelStyle, isSelected && selectedTollLabelStyle]}
-                >
-                  Ücretli geçiş
-                </Text>
-              )}
+              {travelMode === 'car' &&
+                Boolean(
+                  option.summary.tollRoadLength || option.summary.hasTollRoad,
+                ) && (
+                  <Text
+                    style={[
+                      tollLabelStyle,
+                      isSelected && selectedTollLabelStyle,
+                    ]}
+                  >
+                    Ücretli geçiş
+                  </Text>
+                )}
             </Pressable>
           );
         })}
       </View>
       <Pressable
         disabled={isTravelModeChanging}
-        style={[styles.primaryButton, isTravelModeChanging && styles.buttonDisabled]}
+        style={[
+          styles.primaryButton,
+          isTravelModeChanging && styles.buttonDisabled,
+        ]}
         onPress={onStart}
       >
         <Text style={styles.primaryButtonText}>Navigasyonu başlat</Text>
@@ -1722,7 +1928,6 @@ function TravelModePicker({
   );
 }
 function NavigationPanel({
-  summary,
   bottomInset,
   onEnd,
   onChangeRoute,
@@ -1739,9 +1944,10 @@ function NavigationPanel({
   remainingDuration,
   estimatedArrival,
   hasArrived,
+  isArrivalReady,
   travelMode,
+  onCompleteArrival,
 }: {
-  summary: RouteSummary;
   bottomInset: number;
   onEnd: () => void;
   onChangeRoute: () => void;
@@ -1758,7 +1964,9 @@ function NavigationPanel({
   remainingDuration: number;
   estimatedArrival: string;
   hasArrived: boolean;
+  isArrivalReady: boolean;
   travelMode: TravelMode;
+  onCompleteArrival: () => void;
 }) {
   const isWalking = travelMode === 'pedestrian';
   const completedDistance = traveledDistance;
@@ -1800,7 +2008,11 @@ function NavigationPanel({
             <View style={styles.navigationContent}>
               {isWalking && (
                 <View style={styles.walkingNavigationBadge}>
-                  <MaterialIcons name="directions-walk" size={15} color="#D6FFF0" />
+                  <MaterialIcons
+                    name="directions-walk"
+                    size={15}
+                    color="#D6FFF0"
+                  />
                   <Text style={styles.walkingNavigationBadgeText}>
                     YAYA NAVİGASYONU
                   </Text>
@@ -1845,19 +2057,36 @@ function NavigationPanel({
             </Pressable>
           </View>
           <View style={styles.navigationMetrics}>
-            <Text style={styles.navMetric}>{formatDuration(remainingDuration)}</Text>
+            <Text style={styles.navMetric}>
+              {formatDuration(remainingDuration)}
+            </Text>
             <View style={styles.metricDivider} />
-            <Text style={styles.navMetric}>{formatDistance(remainingDistance)}</Text>
+            <Text style={styles.navMetric}>
+              {formatDistance(remainingDistance)}
+            </Text>
           </View>
           <View style={styles.progressLabels}>
             <Text style={styles.progressLabel}>
               Gidilen {formatDistance(traveledDistance)}
             </Text>
-            <Text style={styles.progressLabel}>Rota %{Math.round(routeProgress)}</Text>
+            <Text style={styles.progressLabel}>
+              Rota %{Math.round(routeProgress)}
+            </Text>
           </View>
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, progressFillStyle]} />
           </View>
+          {isArrivalReady && (
+            <Pressable
+              style={styles.completeArrivalButton}
+              onPress={onCompleteArrival}
+            >
+              <MaterialIcons name="place" size={18} color={colors.white} />
+              <Text style={styles.completeArrivalButtonText}>
+                Hedefe yaklaştın · Varışı tamamla
+              </Text>
+            </Pressable>
+          )}
           {__DEV__ && isDemoDriving && (
             <View style={styles.demoControls}>
               <Text style={styles.demoIndicator}>
@@ -1872,7 +2101,11 @@ function NavigationPanel({
                 ]}
                 onPress={onDemoReroute}
               >
-                <MaterialIcons name="alt-route" size={16} color={colors.white} />
+                <MaterialIcons
+                  name="alt-route"
+                  size={16}
+                  color={colors.white}
+                />
                 <Text style={styles.demoRerouteButtonText}>
                   {isDemoRerouting ? 'Çiziliyor' : 'Sapmayı dene'}
                 </Text>
@@ -1948,12 +2181,12 @@ function RoadStatus({
     traffic?.category === 'JAM'
       ? 'Yoğun trafik'
       : traffic?.category === 'ROAD_WORK'
-        ? 'Yol çalışması'
-        : traffic?.category === 'ROAD_CLOSURE'
-          ? 'Yol kapalı'
-          : traffic
-            ? 'Trafik olayı'
-            : null;
+      ? 'Yol çalışması'
+      : traffic?.category === 'ROAD_CLOSURE'
+      ? 'Yol kapalı'
+      : traffic
+      ? 'Trafik olayı'
+      : null;
   return (
     <View style={[styles.roadStatus, { top }]}>
       {speedLimit && (
@@ -1967,7 +2200,9 @@ function RoadStatus({
           <MaterialIcons name="traffic" size={17} color="#FFF3D9" />
           <Text style={styles.trafficBadgeText}>
             {traffic?.effectiveSpeedInKmh
-              ? `${trafficLabel} · ${Math.round(traffic.effectiveSpeedInKmh)} km/s`
+              ? `${trafficLabel} · ${Math.round(
+                  traffic.effectiveSpeedInKmh,
+                )} km/s`
               : trafficLabel}
           </Text>
         </View>
@@ -1979,7 +2214,14 @@ function RoadStatus({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   overlay: { ...StyleSheet.absoluteFill, justifyContent: 'flex-end' },
-  tools: { position: 'absolute', right: 16, zIndex: 3, elevation: 3 },
+  tools: {
+    position: 'absolute',
+    right: 16,
+    alignItems: 'flex-end',
+    gap: 10,
+    zIndex: 3,
+    elevation: 3,
+  },
   roadStatus: {
     position: 'absolute',
     right: 16,
@@ -2019,6 +2261,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  goToCarButton: {
+    height: 54,
+    width: 54,
+    borderRadius: 18,
+    paddingHorizontal: 13,
+    backgroundColor: '#1667FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    shadowColor: '#000000',
+    shadowOpacity: 0.22,
+    shadowRadius: 7,
+    elevation: 4,
+  },
+  goToCarButtonText: { color: colors.white, fontSize: 13, fontWeight: '800' },
   back: {
     position: 'absolute',
     left: 16,
@@ -2224,7 +2481,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#EAF1FF',
   },
   savedPlaceCopy: { flex: 1, minWidth: 0 },
+  savedPlaceTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  savedPlaceTag: {
+    color: colors.primary,
+    backgroundColor: '#EAF1FF',
+    borderRadius: 5,
+    overflow: 'hidden',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  savedPlaceLabelButton: { padding: 8 },
   deleteSavedPlace: { padding: 11 },
+  recentPlacesTitle: { marginTop: 20 },
   emptySearch: { color: colors.textMuted, marginTop: 24, textAlign: 'center' },
   result: {
     paddingVertical: 15,
@@ -2546,6 +2817,21 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 3,
     backgroundColor: colors.primary,
+  },
+  completeArrivalButton: {
+    marginTop: 14,
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: '#15735B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  completeArrivalButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '800',
   },
   demoControls: {
     flexDirection: 'row',
