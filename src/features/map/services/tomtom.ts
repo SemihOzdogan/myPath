@@ -71,6 +71,34 @@ export async function searchPlaces(
     }));
 }
 
+/** Resolves the visible POI nearest to a map tap when the map uses raster tiles. */
+export async function searchNearbyPlace(
+  apiKey: string,
+  coordinate: Coordinate,
+): Promise<Place | null> {
+  requireKey(apiKey);
+  const url = new URL('https://api.tomtom.com/search/2/nearbySearch/.json');
+  url.searchParams.set('key', apiKey.trim());
+  url.searchParams.set('lat', String(coordinate[1]));
+  url.searchParams.set('lon', String(coordinate[0]));
+  url.searchParams.set('radius', '60');
+  url.searchParams.set('limit', '1');
+  url.searchParams.set('language', 'tr-TR');
+  const response = await fetch(url.toString());
+  if (!response.ok) return null;
+  const data = (await response.json()) as { results?: TomTomSearchResult[] };
+  const result = data.results?.[0];
+  if (!result?.poi?.name) return null;
+  return {
+    title: result.poi.name,
+    label: result.address?.freeformAddress ?? 'Haritadan seçilen yer',
+    coordinate: result.position
+      ? [result.position.lon, result.position.lat]
+      : coordinate,
+    isTemporary: true,
+  };
+}
+
 export async function calculateRoutes(
   apiKey: string,
   origin: Coordinate,

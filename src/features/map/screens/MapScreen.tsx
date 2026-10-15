@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CameraRef, type MapRef } from '@maplibre/maplibre-react-native';
 import { MaterialIcons } from '@react-native-vector-icons/material-icons/static';
-import CompassHeading from 'react-native-compass-heading';
 import Geolocation from 'react-native-geolocation-service';
 import {
   ActivityIndicator,
   Alert,
   Image,
   Linking,
+  Modal,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -25,6 +25,7 @@ import { MapCanvas } from '../components/MapCanvas';
 import { ISTANBUL, QUICK_CATEGORIES } from '../constants/map';
 import type {
   Coordinate,
+  NavigationIndicator,
   Place,
   RouteOption,
   RouteSummary,
@@ -34,6 +35,7 @@ import type {
 import {
   calculateRoutes,
   resolvePlacePhoto,
+  searchNearbyPlace,
   searchPlaces,
 } from '../services/tomtom';
 import {
@@ -67,6 +69,10 @@ import {
 } from '../services/navigationBackground';
 import { setNavigationScreenAwake } from '../services/navigationScreen';
 import {
+  loadNavigationIndicator,
+  saveNavigationIndicator,
+} from '../services/navigationIndicator';
+import {
   bearingBetween,
   coordinateAtRouteOffset,
   distanceInMeters,
@@ -76,12 +82,31 @@ import {
   maneuverIcon,
   nearestRoutePointIndex,
   routeProgressInMeters,
+  routeOffsetAtPointIndex,
+  routeBearingAtOffset,
+  snapToRoute,
 } from '../utils/geo';
 import type { ManeuverIconName } from '../utils/geo';
 
 type MapPressEvent = {
   nativeEvent: { point: [number, number]; lngLat: Coordinate };
 };
+
+function mapFeatureTitle(properties: Record<string, unknown> | null) {
+  if (!properties) return undefined;
+  const candidates = [
+    properties.name,
+    properties['name:tr'],
+    properties.name_tr,
+    properties.name_en,
+    properties['name:latin'],
+    properties.ref,
+  ];
+  return candidates.find(
+    (candidate): candidate is string =>
+      typeof candidate === 'string' && candidate.trim().length > 0,
+  );
+}
 const locationPin = require('../../../../assets/location-pin.png');
 const locationPinStyle = {
   width: 28,
@@ -112,6 +137,32 @@ const ARRIVAL_DISTANCE_METERS = { car: 15, pedestrian: 10 } as const;
 const ARRIVAL_CONFIRMATION_COUNT = 3;
 const MAX_ARRIVAL_LOCATION_ACCURACY_METERS = 25;
 
+function isUsableDeviceHeading(heading: number | null, speed: number | null) {
+  if (heading === null || !Number.isFinite(heading) || heading < 0) return false;
+  // GPS course can briefly be stale while a vehicle is stationary. Preserve
+  // the road bearing then, but use the device direction as soon as it moves.
+  return speed === null || speed >= 1;
+}
+
+function demoTrafficForRoute(route: RouteOption | undefined) {
+  const lastPointIndex = (route?.coordinates.length ?? 0) - 1;
+  if (lastPointIndex < 6) return [];
+  const section = (
+    start: number,
+    end: number,
+    category: RouteTrafficSection['category'],
+  ): RouteTrafficSection => ({
+    startPointIndex: Math.round(lastPointIndex * start),
+    endPointIndex: Math.round(lastPointIndex * end),
+    category,
+  });
+  return [
+    { ...section(0.18, 0.31, 'JAM'), magnitudeOfDelay: 4 },
+    { ...section(0.43, 0.56, 'JAM'), magnitudeOfDelay: 3 },
+    { ...section(0.68, 0.81, 'JAM'), magnitudeOfDelay: 1 },
+  ];
+}
+
 function arrivalTime(seconds: number) {
   const time = new Date(Date.now() + Math.max(0, seconds) * 1_000);
   return `Varış ${time.toLocaleTimeString('tr-TR', {
@@ -125,7 +176,6 @@ export function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const mapRef = useRef<MapRef>(null);
   const lastNavigationPositionRef = useRef<Coordinate>(ISTANBUL);
-  const compassHeadingRef = useRef<number | null>(null);
   const searchRequestRef = useRef(0);
   const routePreviewRequestRef = useRef(0);
   const routeSelectionRequestRef = useRef(0);
@@ -144,6 +194,10 @@ export function MapScreen() {
   const [destination, setDestination] = useState<Place | null>(null);
   const [navigationPosition, setNavigationPosition] =
     useState<Coordinate>(ISTANBUL);
+  const [mapBearing, setMapBearing] = useState(0);
+  const [navigationHeading, setNavigationHeading] = useState<number | null>(
+    null,
+  );
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Place[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -165,11 +219,32 @@ export function MapScreen() {
   const [isVoiceGuidanceEnabled, setIsVoiceGuidanceEnabled] = useState(true);
   const [isDemoDriving, setIsDemoDriving] = useState(false);
   const [isDemoRerouting, setIsDemoRerouting] = useState(false);
+  const [activeSpeedKmh, setActiveSpeedKmh] = useState<number | null>(null);
+  const [navigationIndicator, setNavigationIndicator] =
+    useState<NavigationIndicator>('yellow-arrow');
+  const [isIndicatorPickerOpen, setIsIndicatorPickerOpen] = useState(false);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [parkedCar, setParkedCar] = useState<ParkedCar | null>(null);
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
+  const routeGeometryLength = useMemo(
+    () =>
+      routeOffsetAtPointIndex(
+        routeGeoCoordinates,
+        routeGeoCoordinates.length - 1,
+      ),
+    [routeGeoCoordinates],
+  );
+  const displayedTrafficSections = useMemo(
+    () =>
+      travelMode !== 'car'
+        ? []
+        : isDemoDriving
+        ? demoTrafficForRoute(route)
+        : route?.trafficSections ?? [],
+    [isDemoDriving, route, travelMode],
+  );
   const currentRoutePointIndex = useMemo(
     () => nearestRoutePointIndex(navigationPosition, routeGeoCoordinates),
     [navigationPosition, routeGeoCoordinates],
@@ -185,12 +260,12 @@ export function MapScreen() {
   );
   const currentTraffic = useMemo(
     () =>
-      route?.trafficSections.find(
+      displayedTrafficSections.find(
         section =>
           section.startPointIndex <= currentRoutePointIndex &&
           currentRoutePointIndex <= section.endPointIndex,
       ),
-    [currentRoutePointIndex, route],
+    [currentRoutePointIndex, displayedTrafficSections],
   );
   const upcomingRoadName = useMemo(() => {
     const road =
@@ -211,6 +286,16 @@ export function MapScreen() {
       routeProgressInMeters(navigationPosition, route.coordinates),
     );
   }, [navigationPosition, route, summary]);
+  const navigationIndicatorRotation = useMemo(() => {
+    if (!route || route.coordinates.length < 2) return 0;
+    // Marker views remain upright while MapLibre rotates the map. Prefer the
+    // GPS course for real driving; the route bearing is a stable fallback.
+    const routeHeading = routeBearingAtOffset(
+      route.coordinates,
+      routeTraveledDistance,
+    );
+    return (navigationHeading ?? routeHeading) - mapBearing;
+  }, [mapBearing, navigationHeading, route, routeTraveledDistance]);
   // A reroute begins at the current position, so its local route progress
   // starts at zero. Keep the already covered distance separately for the
   // navigation card and Live Activity.
@@ -219,8 +304,8 @@ export function MapScreen() {
     0,
     (summary?.length ?? 0) - routeTraveledDistance,
   );
-  const currentRouteProgress = summary?.length
-    ? (routeTraveledDistance / summary.length) * 100
+  const currentRouteProgress = routeGeometryLength
+    ? (routeTraveledDistance / routeGeometryLength) * 100
     : 0;
   const routeProgress = navigationTotalDistance
     ? (traveledDistance / navigationTotalDistance) * 100
@@ -278,6 +363,12 @@ export function MapScreen() {
   useEffect(() => {
     loadParkedCar()
       .then(setParkedCar)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadNavigationIndicator()
+      .then(setNavigationIndicator)
       .catch(() => undefined);
   }, []);
 
@@ -490,15 +581,38 @@ export function MapScreen() {
         if (route && distanceFromRoute > rerouteThreshold)
           rerouteFrom(coordinate).catch(() => undefined);
 
+        const snappedCoordinate =
+          route && distanceFromRoute <= rerouteThreshold
+            ? snapToRoute(coordinate, route.coordinates)
+            : coordinate;
+        const routeHeading =
+          route && route.coordinates.length > 1
+            ? routeBearingAtOffset(
+                route.coordinates,
+                routeProgressInMeters(snappedCoordinate, route.coordinates),
+              )
+            : bearingBetween(lastNavigationPositionRef.current, snappedCoordinate);
+        const speedInMetersPerSecond =
+          typeof position.coords.speed === 'number' && position.coords.speed >= 0
+            ? position.coords.speed
+            : null;
+        const deviceHeading =
+          typeof position.coords.heading === 'number'
+            ? position.coords.heading
+            : null;
+        const heading = isUsableDeviceHeading(
+          deviceHeading,
+          speedInMetersPerSecond,
+        )
+          ? deviceHeading!
+          : routeHeading;
         setOrigin(coordinate);
-        const reportedHeading = position.coords.heading;
-        const heading =
-          compassHeadingRef.current ??
-          (typeof reportedHeading === 'number' && reportedHeading >= 0
-            ? reportedHeading
-            : bearingBetween(lastNavigationPositionRef.current, coordinate));
-        lastNavigationPositionRef.current = coordinate;
-        setNavigationPosition(coordinate);
+        setActiveSpeedKmh(
+          speedInMetersPerSecond === null ? null : speedInMetersPerSecond * 3.6,
+        );
+        lastNavigationPositionRef.current = snappedCoordinate;
+        setNavigationPosition(snappedCoordinate);
+        setNavigationHeading(heading);
         cameraRef.current?.flyTo({
           center: coordinate,
           zoom: navigationZoomRef.current,
@@ -525,34 +639,6 @@ export function MapScreen() {
     route,
     travelMode,
   ]);
-
-  useEffect(() => {
-    if (!isNavigating || hasArrived) return undefined;
-    try {
-      CompassHeading.start(3, ({ heading }: { heading: number }) => {
-        compassHeadingRef.current = heading;
-        cameraRef.current?.flyTo({
-          center: lastNavigationPositionRef.current,
-          zoom: navigationZoomRef.current,
-          pitch: NAVIGATION_PITCH,
-          bearing: heading,
-          duration: 180,
-        });
-      }).catch(() => {
-        compassHeadingRef.current = null;
-      });
-    } catch {
-      compassHeadingRef.current = null;
-    }
-    return () => {
-      compassHeadingRef.current = null;
-      try {
-        CompassHeading.stop().catch(() => undefined);
-      } catch {
-        /* Native module may not be available on an old build. */
-      }
-    };
-  }, [hasArrived, isNavigating]);
 
   async function locateUser() {
     setIsLocating(true);
@@ -737,12 +823,11 @@ export function MapScreen() {
   function startNavigation() {
     if (!route) return;
     stopDemoDrive();
-    const routeStart = route.coordinates[0] ?? origin;
-    const initialHeading =
-      route.coordinates.length > 1
-        ? bearingBetween(route.coordinates[0], route.coordinates[1])
-        : 0;
-    compassHeadingRef.current = null;
+    const routeStart = snapToRoute(origin, route.coordinates);
+    const initialHeading = routeBearingAtOffset(
+      route.coordinates,
+      routeProgressInMeters(routeStart, route.coordinates),
+    );
     navigationSessionRef.current += 1;
     routeSelectionRequestRef.current += 1;
     rerouteRequestRef.current += 1;
@@ -751,6 +836,7 @@ export function MapScreen() {
     setDistanceBeforeCurrentRoute(0);
     setNavigationTotalDistance(summary?.length ?? 0);
     setNavigationPosition(routeStart);
+    setNavigationHeading(initialHeading);
     lastNavigationPositionRef.current = routeStart;
     spokenInstructionRef.current = null;
     arrivalConfirmationRef.current = 0;
@@ -758,6 +844,7 @@ export function MapScreen() {
     setHasArrived(false);
     setIsArrivalReady(false);
     setIsNavigating(true);
+    setActiveSpeedKmh(null);
     setNavigationScreenAwake(true).catch(() => undefined);
     liveActivityUpdateRef.current = null;
     if (destination && summary) {
@@ -906,6 +993,10 @@ export function MapScreen() {
   }
   function showNavigationOptions() {
     const options = [
+      {
+        text: 'Ok göstergesini seç',
+        onPress: () => setIsIndicatorPickerOpen(true),
+      },
       ...(__DEV__
         ? [
             {
@@ -934,6 +1025,7 @@ export function MapScreen() {
     }
     isDemoPositionOverrideRef.current = false;
     setIsDemoDriving(false);
+    setActiveSpeedKmh(null);
     if (route) {
       startNavigationBackgroundService(
         route.coordinates,
@@ -964,9 +1056,15 @@ export function MapScreen() {
         option.coordinates,
         Math.min(option.summary.length, offset + offsetStep),
       );
+      // A real GPS fix supplies metres/second. Mirror that value during demo
+      // driving so the active-speed display can be verified on-device too.
+      setActiveSpeedKmh(
+        Math.min(70, Math.max(15, (offsetStep / DEMO_DRIVE_INTERVAL) * 3_600)),
+      );
       setOrigin(coordinate);
       setNavigationPosition(coordinate);
       lastNavigationPositionRef.current = coordinate;
+      setNavigationHeading(bearingBetween(coordinate, nextCoordinate));
       cameraRef.current?.flyTo({
         center: coordinate,
         zoom: navigationZoomRef.current,
@@ -983,6 +1081,7 @@ export function MapScreen() {
         }
         isDemoPositionOverrideRef.current = false;
         setIsDemoDriving(false);
+        setActiveSpeedKmh(null);
         setHasArrived(true);
         speakNavigationArrival().catch(() => undefined);
       }
@@ -1052,22 +1151,38 @@ export function MapScreen() {
     if (!nativeEvent) return;
     const features =
       (await mapRef.current?.queryRenderedFeatures(nativeEvent.point)) ?? [];
+    // A raster map layer does not expose feature properties. Search all
+    // underlying rendered features for a label, then still accept a plain map
+    // tap as a coordinate destination instead of ignoring the user's action.
     const feature = features.find(item =>
-      Boolean((item.properties as Record<string, unknown> | null)?.name),
+      Boolean(
+        mapFeatureTitle(item.properties as Record<string, unknown> | null),
+      ),
     );
     const properties = feature?.properties as Record<string, unknown> | null;
-    const title = properties?.name;
-    if (typeof title !== 'string') return;
-    const place = {
+    const title =
+      mapFeatureTitle(properties) ?? 'Haritadan seçilen konum';
+    let place: Place = {
       title,
-      label: 'Haritadan seçilen konum',
+      label: feature ? 'Haritadan seçilen yer' : 'Haritadan seçilen konum',
       coordinate: nativeEvent.lngLat,
+      isTemporary: true,
     };
+    // Raster labels cannot be queried as vector features. Look up the nearest
+    // TomTom POI so tapping a displayed place keeps its real name.
+    if (!feature) {
+      try {
+        place = (await searchNearbyPlace(TOMTOM_API_KEY, nativeEvent.lngLat)) ??
+          place;
+      } catch {
+        // Coordinate destinations remain useful when the lookup is offline.
+      }
+    }
     chooseDestination(place);
     const imageUrl = await resolvePlacePhoto(properties);
     if (imageUrl)
       setDestination(current =>
-        current?.title === title ? { ...current, imageUrl } : current,
+        current?.title === place.title ? { ...current, imageUrl } : current,
       );
   }
   function goBack() {
@@ -1115,12 +1230,16 @@ export function MapScreen() {
         travelMode={travelMode}
         navigationPosition={navigationPosition}
         traveledDistance={routeTraveledDistance}
-        trafficSections={route?.trafficSections ?? []}
+        trafficSections={displayedTrafficSections}
+        tomTomApiKey={TOMTOM_API_KEY}
+        navigationIndicator={navigationIndicator}
+        navigationIndicatorRotation={navigationIndicatorRotation}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
         }}
-        onRegionDidChange={zoom => {
+        onRegionDidChange={(zoom, bearing) => {
           navigationZoomRef.current = zoom;
+          setMapBearing(bearing);
         }}
         onSelectRoute={selectRoute}
       />
@@ -1169,6 +1288,7 @@ export function MapScreen() {
         )}
         {isNavigating && travelMode === 'car' && (
           <RoadStatus
+            activeSpeedKmh={activeSpeedKmh}
             speedLimit={currentSpeedLimit}
             traffic={currentTraffic}
             top={insets.top + 142}
@@ -1266,6 +1386,9 @@ export function MapScreen() {
             traveledDistance={traveledDistance}
             remainingDistance={remainingDistance}
             routeProgress={routeProgress}
+            trafficProgress={currentRouteProgress}
+            trafficSections={displayedTrafficSections}
+            routeCoordinates={routeGeoCoordinates}
             remainingDuration={remainingDuration}
             estimatedArrival={estimatedArrival}
             hasArrived={hasArrived}
@@ -1311,7 +1434,147 @@ export function MapScreen() {
           />
         )}
       </View>
+      <NavigationIndicatorPicker
+        visible={isIndicatorPickerOpen}
+        selected={navigationIndicator}
+        onClose={() => setIsIndicatorPickerOpen(false)}
+        onSelect={indicator => {
+          setNavigationIndicator(indicator);
+          saveNavigationIndicator(indicator).catch(() => undefined);
+          setIsIndicatorPickerOpen(false);
+        }}
+      />
     </View>
+  );
+}
+
+const navigationIndicatorOptions: Array<{
+  id: NavigationIndicator;
+  label: string;
+  image?: number;
+}> = [
+  { id: 'yellow-arrow', label: 'Sarı ok' },
+  { id: 'blue-arrow', label: 'Mavi ok' },
+  {
+    id: 'red-hatchback',
+    label: 'Kırmızı hatchback',
+    image: require('../../../../assets/navigation-indicators/red-hatchback-v2.png'),
+  },
+  {
+    id: 'blue-sedan',
+    label: 'Mavi sedan',
+    image: require('../../../../assets/navigation-indicators/blue-sedan.png'),
+  },
+  {
+    id: 'yellow-racer',
+    label: 'Sarı yarış otomobili',
+    image: require('../../../../assets/navigation-indicators/yellow-racer-v2.png'),
+  },
+  {
+    id: 'cyan-coupe',
+    label: 'Turkuaz spor otomobil',
+    image: require('../../../../assets/navigation-indicators/cyan-coupe-v2.png'),
+  },
+];
+
+function indicatorImageScale(indicator: NavigationIndicator) {
+  if (indicator === 'red-hatchback') return 1.2;
+  if (indicator === 'yellow-racer' || indicator === 'cyan-coupe') return 1.5;
+  return 1;
+}
+
+function NavigationIndicatorPicker({
+  visible,
+  selected,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  selected: NavigationIndicator;
+  onClose: () => void;
+  onSelect: (indicator: NavigationIndicator) => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.indicatorModalBackdrop}>
+        <Pressable style={styles.indicatorModalDismiss} onPress={onClose} />
+        <View style={styles.indicatorPicker}>
+          <View style={styles.handle} />
+          <View style={styles.indicatorPickerHeader}>
+            <Text style={styles.indicatorPickerTitle}>Ok göstergesi</Text>
+            <Pressable
+              accessibilityLabel="Ok göstergesi seçicisini kapat"
+              style={styles.indicatorPickerClose}
+              onPress={onClose}
+            >
+              <MaterialIcons name="close" size={25} color="#B9BEC8" />
+            </Pressable>
+          </View>
+          <Text style={styles.indicatorPickerSubtitle}>
+            Navigasyonda görünecek araç veya oku seç
+          </Text>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {navigationIndicatorOptions.map(option => {
+              const isSelected = option.id === selected;
+              return (
+                <Pressable
+                  key={option.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: isSelected }}
+                  style={styles.indicatorOption}
+                  onPress={() => onSelect(option.id)}
+                >
+                  <IndicatorOptionVisual
+                    indicator={option.id}
+                    image={option.image}
+                  />
+                  <Text style={styles.indicatorOptionText}>{option.label}</Text>
+                  {isSelected && (
+                    <MaterialIcons
+                      name="check"
+                      size={31}
+                      color={colors.primary}
+                    />
+                  )}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function IndicatorOptionVisual({
+  indicator,
+  image,
+}: {
+  indicator: NavigationIndicator;
+  image?: number;
+}) {
+  const isArrow = indicator === 'yellow-arrow' || indicator === 'blue-arrow';
+  if (image)
+    return (
+      <Image
+        source={image}
+        style={[
+          styles.indicatorVehiclePreview,
+          { transform: [{ scale: indicatorImageScale(indicator) }] },
+        ]}
+      />
+    );
+  return (
+    <MaterialIcons
+      name={isArrow ? 'navigation' : 'directions-car'}
+      size={46}
+      color={indicator === 'yellow-arrow' ? '#F5B700' : '#2878E3'}
+    />
   );
 }
 
@@ -1941,6 +2204,9 @@ function NavigationPanel({
   traveledDistance,
   remainingDistance,
   routeProgress,
+  trafficProgress,
+  trafficSections,
+  routeCoordinates,
   remainingDuration,
   estimatedArrival,
   hasArrived,
@@ -1961,6 +2227,9 @@ function NavigationPanel({
   traveledDistance: number;
   remainingDistance: number;
   routeProgress: number;
+  trafficProgress: number;
+  trafficSections: RouteTrafficSection[];
+  routeCoordinates: Coordinate[];
   remainingDuration: number;
   estimatedArrival: string;
   hasArrived: boolean;
@@ -1971,9 +2240,49 @@ function NavigationPanel({
   const isWalking = travelMode === 'pedestrian';
   const completedDistance = traveledDistance;
   const progressFillStyle = useMemo(
-    () => ({ width: `${Math.min(100, Math.max(0, routeProgress))}%` }),
-    [routeProgress],
+    () => ({ width: `${Math.min(100, Math.max(0, trafficProgress))}%` }),
+    [trafficProgress],
   );
+  const trafficProgressSegments = useMemo(() => {
+    const routeLength = routeOffsetAtPointIndex(
+      routeCoordinates,
+      routeCoordinates.length - 1,
+    );
+    if (!routeLength) return [];
+    return trafficSections.map((section, index) => {
+      const magnitude = section.magnitudeOfDelay ?? 0;
+      const color =
+        section.category === 'JAM'
+          ? magnitude >= 4
+            ? '#7F1D1D'
+            : magnitude >= 3
+            ? '#E53935'
+            : '#F2C94C'
+          : section.category === 'ROAD_CLOSURE'
+          ? '#7F1D1D'
+          : section.category === 'ROAD_WORK'
+          ? '#F2C94C'
+          : '#1667FF';
+      const start = Math.max(
+        0,
+        (routeOffsetAtPointIndex(routeCoordinates, section.startPointIndex) /
+          routeLength) *
+          100,
+      );
+      const end = Math.min(
+        100,
+        (routeOffsetAtPointIndex(routeCoordinates, section.endPointIndex) /
+          routeLength) *
+          100,
+      );
+      return {
+        key: `${section.startPointIndex}-${section.endPointIndex}-${index}`,
+        color,
+        left: `${start}%`,
+        width: `${Math.max(0, end - start)}%`,
+      };
+    });
+  }, [routeCoordinates, trafficSections]);
   return (
     <View
       style={[
@@ -2073,7 +2382,25 @@ function NavigationPanel({
               Rota %{Math.round(routeProgress)}
             </Text>
           </View>
-          <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressTrack,
+              isWalking && styles.walkingProgressTrack,
+            ]}
+          >
+            {trafficProgressSegments.map(segment => (
+              <View
+                key={segment.key}
+                style={[
+                  styles.trafficProgressSegment,
+                  {
+                    backgroundColor: segment.color,
+                    left: segment.left,
+                    width: segment.width,
+                  },
+                ]}
+              />
+            ))}
             <View style={[styles.progressFill, progressFillStyle]} />
           </View>
           {isArrivalReady && (
@@ -2090,7 +2417,11 @@ function NavigationPanel({
           {__DEV__ && isDemoDriving && (
             <View style={styles.demoControls}>
               <Text style={styles.demoIndicator}>
-                {isDemoRerouting ? 'Rota güncelleniyor' : 'Demo sürüşü açık'}
+                {isDemoRerouting
+                  ? 'Rota güncelleniyor'
+                  : isWalking
+                  ? 'Demo yürüyüşü açık'
+                  : 'Demo sürüşü · Trafik simülasyonu açık'}
               </Text>
               <Pressable
                 accessibilityLabel="Rota sapmasını test et"
@@ -2168,18 +2499,24 @@ function ManeuverCard({
 }
 
 function RoadStatus({
+  activeSpeedKmh,
   speedLimit,
   traffic,
   top,
 }: {
+  activeSpeedKmh: number | null;
   speedLimit?: number;
   traffic?: RouteTrafficSection;
   top: number;
 }) {
-  if (!speedLimit && !traffic) return null;
+  if (activeSpeedKmh === null && !speedLimit && !traffic) return null;
   const trafficLabel =
     traffic?.category === 'JAM'
-      ? 'Yoğun trafik'
+      ? (traffic.magnitudeOfDelay ?? 0) >= 4
+        ? 'Çok yoğun trafik'
+        : (traffic.magnitudeOfDelay ?? 0) >= 3
+        ? 'Yoğun trafik'
+        : 'Normal trafik'
       : traffic?.category === 'ROAD_WORK'
       ? 'Yol çalışması'
       : traffic?.category === 'ROAD_CLOSURE'
@@ -2189,6 +2526,14 @@ function RoadStatus({
       : null;
   return (
     <View style={[styles.roadStatus, { top }]}>
+      {activeSpeedKmh !== null && (
+        <View style={styles.currentSpeedBadge}>
+          <Text style={styles.currentSpeedValue}>
+            {Math.round(activeSpeedKmh)}
+          </Text>
+          <Text style={styles.currentSpeedUnit}>KM/SA</Text>
+        </View>
+      )}
       {speedLimit && (
         <View style={styles.speedLimitBadge}>
           <Text style={styles.speedLimitValue}>{Math.round(speedLimit)}</Text>
@@ -2239,6 +2584,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  currentSpeedBadge: {
+    minWidth: 62,
+    minHeight: 62,
+    borderRadius: 31,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#17191D',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  currentSpeedValue: { color: colors.white, fontSize: 24, fontWeight: '900' },
+  currentSpeedUnit: {
+    color: '#BFC5CF',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
   speedLimitValue: { color: '#17191D', fontSize: 22, fontWeight: '900' },
   speedLimitUnit: { color: '#5D6470', fontSize: 9, fontWeight: '800' },
@@ -2807,16 +3170,21 @@ const styles = StyleSheet.create({
   },
   progressLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
   progressTrack: {
+    position: 'relative',
     height: 6,
     marginTop: 6,
     borderRadius: 3,
     overflow: 'hidden',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: '#1667FF',
   },
+  walkingProgressTrack: { backgroundColor: '#16A879' },
+  trafficProgressSegment: { position: 'absolute', top: 0, bottom: 0 },
   progressFill: {
+    position: 'absolute',
+    left: 0,
     height: '100%',
     borderRadius: 3,
-    backgroundColor: colors.primary,
+    backgroundColor: '#A7B0C0',
   },
   completeArrivalButton: {
     marginTop: 14,
@@ -2913,4 +3281,51 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
+  indicatorModalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: '#00000088',
+  },
+  indicatorModalDismiss: { ...StyleSheet.absoluteFill },
+  indicatorPicker: {
+    maxHeight: '74%',
+    minHeight: 480,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    backgroundColor: '#202327',
+    paddingHorizontal: 22,
+    paddingBottom: 28,
+  },
+  indicatorPickerHeader: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  indicatorPickerTitle: { color: colors.white, fontSize: 26, fontWeight: '800' },
+  indicatorPickerClose: {
+    position: 'absolute',
+    right: 0,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3C4149',
+  },
+  indicatorPickerSubtitle: {
+    color: colors.textMuted,
+    fontSize: 14,
+    marginBottom: 10,
+  },
+  indicatorOption: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#343940',
+    gap: 14,
+  },
+  indicatorVehiclePreview: { width: 58, height: 58, resizeMode: 'contain' },
+  indicatorOptionText: { flex: 1, color: colors.white, fontSize: 19 },
 });

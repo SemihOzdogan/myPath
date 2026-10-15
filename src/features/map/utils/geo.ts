@@ -84,6 +84,57 @@ export function coordinateAtRouteOffset(
   return coordinates[coordinates.length - 1];
 }
 
+/** Distance along a route at a response point index (such as a TomTom section). */
+export function routeOffsetAtPointIndex(
+  coordinates: Coordinate[],
+  pointIndex: number,
+) {
+  const lastIndex = Math.max(0, Math.min(pointIndex, coordinates.length - 1));
+  let offset = 0;
+  for (let index = 1; index <= lastIndex; index += 1) {
+    offset += distanceInMeters(coordinates[index - 1], coordinates[index]);
+  }
+  return offset;
+}
+
+/**
+ * Returns a valid line segment of a route between two travelled offsets. The
+ * interpolated endpoints keep traffic overlays aligned with the route rather
+ * than jumping to the nearest route vertex.
+ */
+export function routeSliceBetweenOffsets(
+  coordinates: Coordinate[],
+  startOffsetInMeters: number,
+  endOffsetInMeters: number,
+): Coordinate[] {
+  if (coordinates.length < 2 || endOffsetInMeters <= startOffsetInMeters)
+    return [];
+
+  const start = Math.max(0, startOffsetInMeters);
+  const end = Math.max(start, endOffsetInMeters);
+  const result: Coordinate[] = [coordinateAtRouteOffset(coordinates, start)];
+  let travelled = 0;
+
+  for (let index = 1; index < coordinates.length; index += 1) {
+    travelled += distanceInMeters(coordinates[index - 1], coordinates[index]);
+    if (travelled > start && travelled < end) result.push(coordinates[index]);
+    if (travelled >= end) break;
+  }
+
+  result.push(coordinateAtRouteOffset(coordinates, end));
+  return result;
+}
+
+/** Keeps the vehicle and camera oriented along the legal route, not raw compass noise. */
+export function routeBearingAtOffset(
+  coordinates: Coordinate[],
+  offsetInMeters: number,
+) {
+  const from = coordinateAtRouteOffset(coordinates, offsetInMeters);
+  const to = coordinateAtRouteOffset(coordinates, offsetInMeters + 12);
+  return bearingBetween(from, to);
+}
+
 /** Splits a route at the travelled distance so it can be styled as passed/remaining. */
 export function splitRouteAtOffset(
   coordinates: Coordinate[],

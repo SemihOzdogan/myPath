@@ -2,6 +2,14 @@ export type Coordinate = [longitude: number, latitude: number];
 
 export type TravelMode = 'car' | 'pedestrian';
 
+export type NavigationIndicator =
+  | 'yellow-arrow'
+  | 'blue-arrow'
+  | 'red-hatchback'
+  | 'blue-sedan'
+  | 'yellow-racer'
+  | 'cyan-coupe';
+
 export type Place = {
   title: string;
   label: string;
