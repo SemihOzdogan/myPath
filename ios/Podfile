@@ -5,7 +5,8 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+# Revopush 2.6 (required by React Native 0.87) supports iOS 15.5 and later.
+platform :ios, '15.5'
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']
@@ -33,7 +34,18 @@ target 'myPath' do
     $MLRN.post_install(installer)
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |build_configuration|
-        build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+      end
+    end
+
+    # Load the deployment key from a local, gitignored Xcode configuration.
+    # The optional include lets CI inject the key as a build setting instead.
+    %w[debug release staging].each do |configuration|
+      config_path = File.join(__dir__, "Pods/Target Support Files/Pods-myPath/Pods-myPath.#{configuration}.xcconfig")
+      local_config_include = '#include? "../../../myPath/Revopush.xcconfig"'
+
+      unless File.read(config_path).include?(local_config_include)
+        File.open(config_path, 'a') { |file| file.puts "\n#{local_config_include}" }
       end
     end
   end

@@ -72,6 +72,41 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def revopushLocalProperties = new Properties()
+def revopushLocalPropertiesFile = rootProject.file('../.env.revopush.local')
+if (revopushLocalPropertiesFile.exists()) {
+    revopushLocalPropertiesFile.withInputStream { stream -> revopushLocalProperties.load(stream) }
+}
+
+def revopushProductionDeploymentKey = project.findProperty('REVOPUSH_ANDROID_PRODUCTION_DEPLOYMENT_KEY') ?:
+    System.getenv('REVOPUSH_ANDROID_PRODUCTION_DEPLOYMENT_KEY') ?:
+    revopushLocalProperties.getProperty('REVOPUSH_ANDROID_PRODUCTION_DEPLOYMENT_KEY', '') ?:
+    // Backward-compatible local name. Prefer REVOPUSH_ANDROID_PRODUCTION_DEPLOYMENT_KEY
+    // in CI and on newly configured machines.
+    project.findProperty('REVOPUSH_ANDROID_DEPLOYMENT_KEY') ?:
+    System.getenv('REVOPUSH_ANDROID_DEPLOYMENT_KEY') ?:
+    revopushLocalProperties.getProperty('REVOPUSH_ANDROID_DEPLOYMENT_KEY', '')
+
+def revopushStagingDeploymentKey = project.findProperty('REVOPUSH_ANDROID_STAGING_DEPLOYMENT_KEY') ?:
+    System.getenv('REVOPUSH_ANDROID_STAGING_DEPLOYMENT_KEY') ?:
+    revopushLocalProperties.getProperty('REVOPUSH_ANDROID_STAGING_DEPLOYMENT_KEY', '')
+
+def isReleaseBuild = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase().contains('release')
+}
+
+def isStagingBuild = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase().contains('staging')
+}
+
+if (isReleaseBuild && !revopushProductionDeploymentKey) {
+    throw new GradleException('REVOPUSH_ANDROID_PRODUCTION_DEPLOYMENT_KEY must be set for production release builds.')
+}
+
+if (isStagingBuild && !revopushStagingDeploymentKey) {
+    throw new GradleException('REVOPUSH_ANDROID_STAGING_DEPLOYMENT_KEY must be set for staging builds.')
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -84,6 +119,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        resValue "string", "CodePushDeploymentKey", revopushProductionDeploymentKey
     }
     signingConfigs {
         debug {
@@ -96,13 +132,23 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+        staging {
+            initWith release
+            applicationIdSuffix ".staging"
+            versionNameSuffix "-staging"
+            matchingFallbacks = ["release"]
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
+            resValue "string", "CodePushDeploymentKey", revopushStagingDeploymentKey
         }
     }
 }
@@ -117,3 +163,5 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+apply from: "../../node_modules/@revopush/react-native-code-push/android/codepush.gradle"

@@ -26,6 +26,7 @@ DerivedData
 .env
 .env.*
 !.env.example
+/ios/myPath/Revopush.xcconfig
 !/src/config.example.ts
 /src/config.local.ts
 /src/config.*.local.ts

@@ -18,6 +18,7 @@
     "@react-native/new-app-screen": "0.87.1",
     "@react-navigation/native": "^7.5.0",
     "@react-navigation/native-stack": "^7.20.0",
+    "@revopush/react-native-code-push": "^2.6.2",
     "react": "19.2.3",
     "react-native": "0.87.1",
     "react-native-compass-heading": "^2.0.2",

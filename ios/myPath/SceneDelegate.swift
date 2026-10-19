@@ -4,6 +4,7 @@ import UIKit
 import React
 import ReactAppDependencyProvider
 import React_RCTAppDelegate
+import CodePush
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -50,7 +51,7 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 #if DEBUG
     RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
 #else
-    Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    CodePush.bundleURL()
 #endif
   }
 }
