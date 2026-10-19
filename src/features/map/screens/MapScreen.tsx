@@ -1605,7 +1605,7 @@ function HomePanel({
           color="#DDE0E5"
           style={styles.searchIcon}
         />
-        <Text style={styles.searchCopy}>Mekan veya Adres arama</Text>
+        <Text style={styles.searchCopy}>Gitmek istediğiniz yeri yazın</Text>
       </Pressable>
       <ScrollView
         horizontal
@@ -1785,7 +1785,7 @@ function SearchPanel({
           autoFocus
           value={query}
           onChangeText={onChange}
-          placeholder="Mekan veya Adres arama"
+          placeholder="Gitmek istediğiniz yeri yazın"
           placeholderTextColor={colors.textMuted}
           style={styles.input}
           returnKeyType="search"
