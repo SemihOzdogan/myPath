@@ -60,9 +60,20 @@ export async function updateSavedPlaceLabel(
   id: string,
   labelType?: SavedPlaceLabel,
 ): Promise<SavedPlace[]> {
-  const next = (await loadSavedPlaces()).map(place =>
-    place.id === id ? { ...place, labelType } : place,
-  );
+  const next = (await loadSavedPlaces()).map(place => {
+    if (place.id === id) return { ...place, labelType };
+
+    // Home and work are single destinations. Choosing a new one replaces the
+    // existing assignment, while users can keep any number of favorites.
+    if (
+      (labelType === 'home' || labelType === 'work') &&
+      place.labelType === labelType
+    ) {
+      return { ...place, labelType: undefined };
+    }
+
+    return place;
+  });
   await AsyncStorage.setItem(SAVED_PLACES_KEY, JSON.stringify(next));
   return next;
 }

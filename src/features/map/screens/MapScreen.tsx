@@ -225,6 +225,9 @@ export function MapScreen() {
   const [isIndicatorPickerOpen, setIsIndicatorPickerOpen] = useState(false);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [parkedCar, setParkedCar] = useState<ParkedCar | null>(null);
+  const quickDestinations = savedPlaces.filter(
+    place => place.labelType === 'home' || place.labelType === 'work',
+  );
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
   const routeGeoCoordinates = useMemo(() => route?.coordinates ?? [], [route]);
@@ -1344,6 +1347,28 @@ export function MapScreen() {
                 />
               </Pressable>
             )}
+            {!destination &&
+              !isNavigating &&
+              quickDestinations.map(place => {
+                const isHome = place.labelType === 'home';
+                return (
+                  <Pressable
+                    key={place.id}
+                    accessibilityLabel={`${isHome ? 'Ev' : 'İş'} için rota oluştur`}
+                    style={styles.goToCarButton}
+                    onPress={() => {
+                      setTravelMode('car');
+                      chooseDestination(place);
+                    }}
+                  >
+                    <MaterialIcons
+                      name={isHome ? 'home' : 'business'}
+                      size={26}
+                      color={colors.white}
+                    />
+                  </Pressable>
+                );
+              })}
           </View>
         )}
         {isSearchOpen && !destination ? (
@@ -1660,14 +1685,39 @@ function SearchPanel({
   const recentPlaces = savedPlaces.filter(place => !place.labelType);
 
   function chooseSavedPlaceLabel(place: SavedPlace) {
+    function assignLabel(labelType: SavedPlaceLabel) {
+      const existing = savedPlaces.find(
+        candidate =>
+          candidate.id !== place.id && candidate.labelType === labelType,
+      );
+      if (!existing || labelType === 'favorite') {
+        onChangeSavedLabel(place.id, labelType);
+        return;
+      }
+
+      const label = labelType === 'home' ? 'Ev' : 'İş';
+      Alert.alert(
+        `${label} adresi değişsin mi?`,
+        `${existing.title} yerine ${place.title} ${label.toLocaleLowerCase('tr-TR')} olarak kaydedilecek.`,
+        [
+          { text: 'Vazgeç', style: 'cancel' },
+          {
+            text: 'Değiştir',
+            style: 'destructive',
+            onPress: () => onChangeSavedLabel(place.id, labelType),
+          },
+        ],
+      );
+    }
+
     Alert.alert('Yer etiketi', place.title, [
       {
         text: 'Ev',
-        onPress: () => onChangeSavedLabel(place.id, 'home'),
+        onPress: () => assignLabel('home'),
       },
       {
         text: 'İş',
-        onPress: () => onChangeSavedLabel(place.id, 'work'),
+        onPress: () => assignLabel('work'),
       },
       {
         text: 'Favori',
