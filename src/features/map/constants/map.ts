@@ -1,7 +1,16 @@
 import type { Coordinate } from '../domain/types';
 
-export const ISTANBUL: Coordinate = [28.9784, 41.0082];
+// The app is available worldwide. This is only used until a device location is
+// available; it must not bias users without location permission toward Türkiye.
+export const DEFAULT_MAP_CENTER: Coordinate = [0, 20];
+export const DEFAULT_MAP_ZOOM = 1.5;
 export const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/bright';
+
+export function isDefaultMapCenter([longitude, latitude]: Coordinate) {
+  return (
+    longitude === DEFAULT_MAP_CENTER[0] && latitude === DEFAULT_MAP_CENTER[1]
+  );
+}
 
 export const QUICK_CATEGORIES = [
   ['restaurant', 'Yemek'],

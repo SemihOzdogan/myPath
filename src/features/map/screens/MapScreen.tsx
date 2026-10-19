@@ -4,7 +4,6 @@ import { MaterialIcons } from '@react-native-vector-icons/material-icons/static'
 import Geolocation from 'react-native-geolocation-service';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   Modal,
@@ -20,9 +19,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOMTOM_API_KEY } from '../../../config.local';
 import { DraggableSheet } from '../../../shared/components/DraggableSheet';
+import {
+  AppDialog,
+  type AppDialogAction,
+} from '../../../shared/components/AppDialog';
 import { colors, radii } from '../../../theme/tokens';
 import { MapCanvas } from '../components/MapCanvas';
-import { ISTANBUL, QUICK_CATEGORIES } from '../constants/map';
+import {
+  DEFAULT_MAP_CENTER,
+  isDefaultMapCenter,
+  QUICK_CATEGORIES,
+} from '../constants/map';
 import type {
   Coordinate,
   NavigationIndicator,
@@ -90,6 +97,12 @@ import type { ManeuverIconName } from '../utils/geo';
 
 type MapPressEvent = {
   nativeEvent: { point: [number, number]; lngLat: Coordinate };
+};
+
+type DialogState = {
+  title: string;
+  message?: string;
+  actions: AppDialogAction[];
 };
 
 function mapFeatureTitle(properties: Record<string, unknown> | null) {
@@ -175,7 +188,8 @@ export function MapScreen() {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<CameraRef>(null);
   const mapRef = useRef<MapRef>(null);
-  const lastNavigationPositionRef = useRef<Coordinate>(ISTANBUL);
+  const lastNavigationPositionRef = useRef<Coordinate>(DEFAULT_MAP_CENTER);
+  const hasInitialLocationFocusRef = useRef(false);
   const searchRequestRef = useRef(0);
   const routePreviewRequestRef = useRef(0);
   const routeSelectionRequestRef = useRef(0);
@@ -190,10 +204,10 @@ export function MapScreen() {
   const arrivalConfirmationRef = useRef(0);
   const lastLocationAccuracyRef = useRef<number>(Number.POSITIVE_INFINITY);
   const isDemoPositionOverrideRef = useRef(false);
-  const [origin, setOrigin] = useState<Coordinate>(ISTANBUL);
+  const [origin, setOrigin] = useState<Coordinate>(DEFAULT_MAP_CENTER);
   const [destination, setDestination] = useState<Place | null>(null);
   const [navigationPosition, setNavigationPosition] =
-    useState<Coordinate>(ISTANBUL);
+    useState<Coordinate>(DEFAULT_MAP_CENTER);
   const [mapBearing, setMapBearing] = useState(0);
   const [navigationHeading, setNavigationHeading] = useState<number | null>(
     null,
@@ -223,10 +237,21 @@ export function MapScreen() {
   const [navigationIndicator, setNavigationIndicator] =
     useState<NavigationIndicator>('yellow-arrow');
   const [isIndicatorPickerOpen, setIsIndicatorPickerOpen] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [parkedCar, setParkedCar] = useState<ParkedCar | null>(null);
   const quickDestinations = savedPlaces.filter(
     place => place.labelType === 'home' || place.labelType === 'work',
+  );
+  const showDialog = useCallback(
+    (title: string, message?: string, actions: AppDialogAction[] = []) =>
+      setDialog({
+        title,
+        message,
+        actions: actions.length ? actions : [{ label: 'Tamam' }],
+      }),
+    [],
   );
   const route = routeOptions[selectedRouteIndex];
   const summary = route?.summary ?? null;
@@ -340,7 +365,7 @@ export function MapScreen() {
         const places = await searchPlaces(TOMTOM_API_KEY, normalized, origin);
         if (requestId === searchRequestRef.current) setResults(places);
       } catch (error) {
-        Alert.alert(
+        showDialog(
           error instanceof Error && error.message === 'API_KEY_MISSING'
             ? 'TomTom anahtarı bulunamadı'
             : 'Arama yapılamadı',
@@ -350,12 +375,23 @@ export function MapScreen() {
         if (requestId === searchRequestRef.current) setIsSearching(false);
       }
     },
-    [origin, query],
+    [origin, query, showDialog],
   );
 
   useEffect(() => {
     locateUser().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (
+      !isMapReady ||
+      hasInitialLocationFocusRef.current ||
+      isDefaultMapCenter(origin)
+    )
+      return;
+    hasInitialLocationFocusRef.current = true;
+    cameraRef.current?.flyTo({ center: origin, zoom: 16, duration: 900 });
+  }, [isMapReady, origin]);
 
   useEffect(() => {
     loadSavedPlaces()
@@ -681,7 +717,10 @@ export function MapScreen() {
           });
         },
         () => {
-          Alert.alert('Konum alınamadı', 'Harita İstanbul merkezinden açıldı.');
+          showDialog(
+            'Konum alınamadı',
+            'Harita dünya görünümünde açıldı. Konum izni verdiğinde bulunduğun konuma odaklanır.',
+          );
         },
         { enableHighAccuracy: true, timeout: 12_000, maximumAge: 20_000 },
       );
@@ -758,7 +797,7 @@ export function MapScreen() {
           .catch(() => undefined);
       }
     } catch {
-      Alert.alert(
+      showDialog(
         'Rota oluşturulamadı',
         'TomTom anahtarını, kotanı ve internet bağlantını kontrol et.',
       );
@@ -793,7 +832,7 @@ export function MapScreen() {
       .catch(() => {
         if (requestId !== routeSelectionRequestRef.current) return;
         setTravelMode(previousMode);
-        Alert.alert(
+        showDialog(
           'Rota güncellenemedi',
           'Mevcut rota korunuyor. Bağlantını kontrol edip tekrar deneyebilirsin.',
         );
@@ -883,14 +922,14 @@ export function MapScreen() {
     });
   }
   function confirmStopNavigation() {
-    Alert.alert(
+    showDialog(
       'Navigasyon bitirilsin mi?',
       'Aktif rota ve sesli yönlendirme sonlandırılacak.',
       [
-        { text: 'Vazgeç', style: 'cancel' },
+        { label: 'Vazgeç', variant: 'cancel' },
         {
-          text: 'Navigasyonu bitir',
-          style: 'destructive',
+          label: 'Navigasyonu bitir',
+          variant: 'danger',
           onPress: () => stopNavigation(),
         },
       ],
@@ -995,27 +1034,27 @@ export function MapScreen() {
     });
   }
   function showNavigationOptions() {
-    const options = [
+    const options: AppDialogAction[] = [
       {
-        text: 'Ok göstergesini seç',
+        label: 'Ok göstergesini seç',
         onPress: () => setIsIndicatorPickerOpen(true),
       },
       ...(__DEV__
         ? [
             {
-              text: isDemoDriving ? 'Demo sürüşü durdur' : 'Demo sürüşü başlat',
+              label: isDemoDriving ? 'Demo sürüşü durdur' : 'Demo sürüşü başlat',
               onPress: toggleDemoDrive,
             },
           ]
         : []),
       {
-        text: 'Navigasyonu bitir',
-        style: 'destructive' as const,
+        label: 'Navigasyonu bitir',
+        variant: 'danger' as const,
         onPress: confirmStopNavigation,
       },
-      { text: 'Vazgeç', style: 'cancel' as const },
+      { label: 'Vazgeç', variant: 'cancel' as const },
     ];
-    Alert.alert('Navigasyon seçenekleri', undefined, options);
+    showDialog('Navigasyon seçenekleri', undefined, options);
   }
   function endNavigationAndSearch() {
     stopNavigation();
@@ -1240,6 +1279,7 @@ export function MapScreen() {
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
         }}
+        onMapReady={() => setIsMapReady(true)}
         onRegionDidChange={(zoom, bearing) => {
           navigationZoomRef.current = zoom;
           setMapBearing(bearing);
@@ -1393,6 +1433,7 @@ export function MapScreen() {
                 .then(setSavedPlaces)
                 .catch(() => undefined);
             }}
+            onShowDialog={showDialog}
             onClear={() => changeSearchQuery('')}
             onClose={closeSearch}
           />
@@ -1468,6 +1509,13 @@ export function MapScreen() {
           saveNavigationIndicator(indicator).catch(() => undefined);
           setIsIndicatorPickerOpen(false);
         }}
+      />
+      <AppDialog
+        visible={Boolean(dialog)}
+        title={dialog?.title ?? ''}
+        message={dialog?.message}
+        actions={dialog?.actions ?? []}
+        onDismiss={() => setDialog(null)}
       />
     </View>
   );
@@ -1664,6 +1712,7 @@ function SearchPanel({
   onPick,
   onRemoveSaved,
   onChangeSavedLabel,
+  onShowDialog,
   onClear,
   onClose,
 }: {
@@ -1677,6 +1726,11 @@ function SearchPanel({
   onPick: (place: Place) => void;
   onRemoveSaved: (id: string) => void;
   onChangeSavedLabel: (id: string, labelType?: SavedPlaceLabel) => void;
+  onShowDialog: (
+    title: string,
+    message?: string,
+    actions?: AppDialogAction[],
+  ) => void;
   onClear: () => void;
   onClose: () => void;
 }) {
@@ -1696,42 +1750,42 @@ function SearchPanel({
       }
 
       const label = labelType === 'home' ? 'Ev' : 'İş';
-      Alert.alert(
+      onShowDialog(
         `${label} adresi değişsin mi?`,
         `${existing.title} yerine ${place.title} ${label.toLocaleLowerCase('tr-TR')} olarak kaydedilecek.`,
         [
-          { text: 'Vazgeç', style: 'cancel' },
+          { label: 'Vazgeç', variant: 'cancel' },
           {
-            text: 'Değiştir',
-            style: 'destructive',
+            label: 'Değiştir',
+            variant: 'danger',
             onPress: () => onChangeSavedLabel(place.id, labelType),
           },
         ],
       );
     }
 
-    Alert.alert('Yer etiketi', place.title, [
+    onShowDialog('Yer etiketi', place.title, [
       {
-        text: 'Ev',
+        label: 'Ev',
         onPress: () => assignLabel('home'),
       },
       {
-        text: 'İş',
+        label: 'İş',
         onPress: () => assignLabel('work'),
       },
       {
-        text: 'Favori',
+        label: 'Favori',
         onPress: () => onChangeSavedLabel(place.id, 'favorite'),
       },
       ...(place.labelType
         ? [
             {
-              text: 'Etiketi kaldır',
+              label: 'Etiketi kaldır',
               onPress: () => onChangeSavedLabel(place.id),
             },
           ]
         : []),
-      { text: 'Vazgeç', style: 'cancel' },
+      { label: 'Vazgeç', variant: 'cancel' },
     ]);
   }
 

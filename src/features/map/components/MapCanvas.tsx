@@ -12,7 +12,11 @@ import {
 import { MaterialIcons } from '@react-native-vector-icons/material-icons/static';
 import { useMemo } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
-import { ISTANBUL, MAP_STYLE_URL } from '../constants/map';
+import {
+  DEFAULT_MAP_CENTER,
+  DEFAULT_MAP_ZOOM,
+  MAP_STYLE_URL,
+} from '../constants/map';
 import type {
   Coordinate,
   Place,
@@ -52,7 +56,10 @@ function indicatorImageScale(indicator: NavigationIndicator) {
   if (indicator === 'yellow-racer' || indicator === 'cyan-coupe') return 1.5;
   return 1;
 }
-const INITIAL_CAMERA_VIEW = { center: ISTANBUL, zoom: 11 };
+const INITIAL_CAMERA_VIEW = {
+  center: DEFAULT_MAP_CENTER,
+  zoom: DEFAULT_MAP_ZOOM,
+};
 const routeLineLayout = { 'line-cap': 'round', 'line-join': 'round' } as const;
 const routeHitbox = { top: 24, right: 24, bottom: 24, left: 24 } as const;
 
@@ -74,6 +81,7 @@ type Props = {
   navigationIndicator: NavigationIndicator;
   navigationIndicatorRotation: number;
   onMapPress: (event: unknown) => void;
+  onMapReady: () => void;
   onRegionDidChange: (zoom: number, bearing: number) => void;
   onSelectRoute: (option: RouteOption, index: number) => void;
 };
@@ -96,6 +104,7 @@ export function MapCanvas({
   navigationIndicator,
   navigationIndicatorRotation,
   onMapPress,
+  onMapReady,
   onRegionDidChange,
   onSelectRoute,
 }: Props) {
@@ -184,6 +193,7 @@ export function MapCanvas({
       logo={false}
       attribution={false}
       onPress={onMapPress as never}
+      onDidFinishLoadingMap={onMapReady}
       onRegionDidChange={(event: { nativeEvent: { zoom: number; bearing: number } }) =>
         onRegionDidChange(event.nativeEvent.zoom, event.nativeEvent.bearing)
       }

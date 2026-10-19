@@ -55,6 +55,8 @@ export async function searchPlaces(
     `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json`,
   );
   url.searchParams.set('key', apiKey.trim());
+  // This is a ranking hint, not a country restriction. The initial coordinate
+  // is world-centred until device location becomes available.
   url.searchParams.set('lat', String(near[1]));
   url.searchParams.set('lon', String(near[0]));
   url.searchParams.set('limit', '5');
