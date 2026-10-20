@@ -25,6 +25,7 @@ import type {
   RouteTrafficSection,
   TravelMode,
 } from '../domain/types';
+import type { TrafficReport } from '../services/trafficReports';
 import {
   routeOffsetAtPointIndex,
   routeSliceBetweenOffsets,
@@ -80,6 +81,8 @@ type Props = {
   tomTomApiKey: string;
   navigationIndicator: NavigationIndicator;
   navigationIndicatorRotation: number;
+  trafficReports: TrafficReport[];
+  onTrafficReportPress: (report: TrafficReport) => void;
   onMapPress: (event: unknown) => void;
   onMapReady: () => void;
   onRegionDidChange: (zoom: number, bearing: number) => void;
@@ -103,6 +106,8 @@ export function MapCanvas({
   tomTomApiKey,
   navigationIndicator,
   navigationIndicatorRotation,
+  trafficReports,
+  onTrafficReportPress,
   onMapPress,
   onMapReady,
   onRegionDidChange,
@@ -428,6 +433,33 @@ export function MapCanvas({
           </View>
         </Marker>
       )}
+      {trafficReports.map(report => (
+        <Marker
+          key={report.id}
+          id={`traffic-report-${report.id}`}
+          lngLat={report.coordinate}
+          anchor="bottom"
+          onPress={event => {
+            event.stopPropagation();
+            onTrafficReportPress(report);
+          }}
+        >
+          <View
+            style={[
+              styles.trafficReportMarker,
+              report.type === 'accident'
+                ? styles.accidentMarker
+                : styles.roadworkMarker,
+            ]}
+          >
+            <MaterialIcons
+              name={report.type === 'accident' ? 'car-crash' : 'construction'}
+              size={22}
+              color="#FFFFFF"
+            />
+          </View>
+        </Marker>
+      ))}
     </Map>
   );
 }
@@ -501,4 +533,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  trafficReportMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.28,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  accidentMarker: { backgroundColor: '#D9342B' },
+  roadworkMarker: { backgroundColor: '#E68A00' },
 });

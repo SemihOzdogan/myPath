@@ -15,6 +15,7 @@ import {
   Text,
   TextInput,
   View,
+  Vibration,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOMTOM_API_KEY } from '../../../config.local';
@@ -63,6 +64,7 @@ import {
   speakNavigationArrival,
   speakNavigationInstruction,
   speakNavigationStart,
+  speakSpeedLimitWarning,
   stopNavigationSpeech,
 } from '../services/navigationSpeech';
 import {
@@ -79,6 +81,14 @@ import {
   loadNavigationIndicator,
   saveNavigationIndicator,
 } from '../services/navigationIndicator';
+import {
+  createTrafficReport,
+  deleteTrafficReport,
+  subscribeToTrafficReports,
+  trafficReportCell,
+  type TrafficReport,
+  type TrafficReportType,
+} from '../services/trafficReports';
 import {
   bearingBetween,
   coordinateAtRouteOffset,
@@ -104,6 +114,7 @@ type DialogState = {
   message?: string;
   actions: AppDialogAction[];
 };
+
 
 function mapFeatureTitle(properties: Record<string, unknown> | null) {
   if (!properties) return undefined;
@@ -149,6 +160,7 @@ const DEMO_REROUTE_OFFSET_METERS = 60;
 const ARRIVAL_DISTANCE_METERS = { car: 15, pedestrian: 10 } as const;
 const ARRIVAL_CONFIRMATION_COUNT = 3;
 const MAX_ARRIVAL_LOCATION_ACCURACY_METERS = 25;
+const SPEED_ALERT_BUFFER_KMH = 5;
 
 function isUsableDeviceHeading(heading: number | null, speed: number | null) {
   if (heading === null || !Number.isFinite(heading) || heading < 0) return false;
@@ -176,12 +188,52 @@ function demoTrafficForRoute(route: RouteOption | undefined) {
   ];
 }
 
+function demoTrafficReportsForRoute(route: RouteOption | undefined): TrafficReport[] {
+  const coordinates = route?.coordinates ?? [];
+  if (coordinates.length < 6) return [];
+
+  // These are deliberately local-only: they make the report pins testable
+  // during the development drive without adding sample data to Firestore.
+  const reportAt = (
+    id: string,
+    progress: number,
+    type: TrafficReportType,
+  ): TrafficReport => ({
+    id,
+    type,
+    coordinate: coordinates[Math.round((coordinates.length - 1) * progress)],
+    description:
+      type === 'accident'
+        ? 'Sol şeritte kaza var, dikkatli ilerleyin.'
+        : 'Sağ şerit yol çalışması nedeniyle kapalı.',
+    createdBy: null,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+  });
+
+  return [
+    reportAt('demo-accident', 0.35, 'accident'),
+    reportAt('demo-roadwork', 0.68, 'roadwork'),
+  ];
+}
+
 function arrivalTime(seconds: number) {
   const time = new Date(Date.now() + Math.max(0, seconds) * 1_000);
   return `Varış ${time.toLocaleTimeString('tr-TR', {
     hour: '2-digit',
     minute: '2-digit',
   })}`;
+}
+
+function trafficReportErrorMessage(error: unknown) {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String(error.code)
+      : '';
+  if (code.includes('permission-denied'))
+    return 'Firebase silme izni henüz etkin değil. Firestore Rules ekranında son kuralları yayınla.';
+  if (code.includes('unavailable'))
+    return 'İnternet bağlantısı kurulamadı. Bağlantını kontrol edip tekrar dene.';
+  return 'Bildirim şu anda kaldırılamadı. Biraz sonra tekrar dene.';
 }
 
 export function MapScreen() {
@@ -203,6 +255,7 @@ export function MapScreen() {
   const navigationSessionRef = useRef(0);
   const arrivalConfirmationRef = useRef(0);
   const lastLocationAccuracyRef = useRef<number>(Number.POSITIVE_INFINITY);
+  const isSpeedAlertActiveRef = useRef(false);
   const isDemoPositionOverrideRef = useRef(false);
   const [origin, setOrigin] = useState<Coordinate>(DEFAULT_MAP_CENTER);
   const [destination, setDestination] = useState<Place | null>(null);
@@ -231,6 +284,9 @@ export function MapScreen() {
   const [hasArrived, setHasArrived] = useState(false);
   const [isArrivalReady, setIsArrivalReady] = useState(false);
   const [isVoiceGuidanceEnabled, setIsVoiceGuidanceEnabled] = useState(true);
+  const [isSpeedAlertEnabled, setIsSpeedAlertEnabled] = useState(true);
+  const [isNavigationSettingsOpen, setIsNavigationSettingsOpen] =
+    useState(false);
   const [isDemoDriving, setIsDemoDriving] = useState(false);
   const [isDemoRerouting, setIsDemoRerouting] = useState(false);
   const [activeSpeedKmh, setActiveSpeedKmh] = useState<number | null>(null);
@@ -241,6 +297,17 @@ export function MapScreen() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [parkedCar, setParkedCar] = useState<ParkedCar | null>(null);
+  const [trafficReports, setTrafficReports] = useState<TrafficReport[]>([]);
+  const [trafficReportType, setTrafficReportType] =
+    useState<TrafficReportType | null>(null);
+  const [trafficReportDescription, setTrafficReportDescription] = useState('');
+  const [dismissedDemoReportIds, setDismissedDemoReportIds] = useState<string[]>(
+    [],
+  );
+  const [isTrafficReportPickerOpen, setIsTrafficReportPickerOpen] =
+    useState(false);
+  const [selectedTrafficReport, setSelectedTrafficReport] =
+    useState<TrafficReport | null>(null);
   const quickDestinations = savedPlaces.filter(
     place => place.labelType === 'home' || place.labelType === 'work',
   );
@@ -273,6 +340,15 @@ export function MapScreen() {
         : route?.trafficSections ?? [],
     [isDemoDriving, route, travelMode],
   );
+  const displayedTrafficReports = useMemo(
+    () =>
+      isDemoDriving
+        ? [...trafficReports, ...demoTrafficReportsForRoute(route)].filter(
+            report => !dismissedDemoReportIds.includes(report.id),
+          )
+        : trafficReports,
+    [dismissedDemoReportIds, isDemoDriving, route, trafficReports],
+  );
   const currentRoutePointIndex = useMemo(
     () => nearestRoutePointIndex(navigationPosition, routeGeoCoordinates),
     [navigationPosition, routeGeoCoordinates],
@@ -294,6 +370,15 @@ export function MapScreen() {
           currentRoutePointIndex <= section.endPointIndex,
       ),
     [currentRoutePointIndex, displayedTrafficSections],
+  );
+  const trafficReportCellId = trafficReportCell(
+    isNavigating ? navigationPosition : origin,
+  );
+  const isSpeeding = Boolean(
+    isSpeedAlertEnabled &&
+      activeSpeedKmh !== null &&
+      currentSpeedLimit &&
+      activeSpeedKmh >= currentSpeedLimit + SPEED_ALERT_BUFFER_KMH,
   );
   const upcomingRoadName = useMemo(() => {
     const road =
@@ -411,6 +496,15 @@ export function MapScreen() {
       .catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeToTrafficReports(
+      trafficReportCellId,
+      setTrafficReports,
+      () => setTrafficReports([]),
+    );
+    return unsubscribe;
+  }, [trafficReportCellId]);
+
   useEffect(
     () => () => {
       stopNavigationSpeech();
@@ -479,6 +573,17 @@ export function MapScreen() {
     remainingDistance,
     travelMode,
   ]);
+
+  useEffect(() => {
+    if (!isSpeeding) {
+      isSpeedAlertActiveRef.current = false;
+      return;
+    }
+    if (isSpeedAlertActiveRef.current) return;
+    isSpeedAlertActiveRef.current = true;
+    Vibration.vibrate(250);
+    if (isVoiceGuidanceEnabled) speakSpeedLimitWarning().catch(() => undefined);
+  }, [isSpeeding, isVoiceGuidanceEnabled]);
 
   useEffect(() => {
     if (!isNavigating || !summary || !destination) return;
@@ -1036,8 +1141,8 @@ export function MapScreen() {
   function showNavigationOptions() {
     const options: AppDialogAction[] = [
       {
-        label: 'Ok göstergesini seç',
-        onPress: () => setIsIndicatorPickerOpen(true),
+        label: 'Navigasyon ayarları',
+        onPress: () => setIsNavigationSettingsOpen(true),
       },
       ...(__DEV__
         ? [
@@ -1055,6 +1160,47 @@ export function MapScreen() {
       { label: 'Vazgeç', variant: 'cancel' as const },
     ];
     showDialog('Navigasyon seçenekleri', undefined, options);
+  }
+  function showTrafficReportOptions() {
+    setIsTrafficReportPickerOpen(true);
+  }
+  function openTrafficReportComposer(type: TrafficReportType) {
+    setIsTrafficReportPickerOpen(false);
+    setTrafficReportDescription('');
+    setTrafficReportType(type);
+  }
+  function submitTrafficReport() {
+    if (!trafficReportType) return;
+    const type = trafficReportType;
+    setTrafficReportType(null);
+    createTrafficReport(type, navigationPosition, trafficReportDescription)
+      .then(() =>
+        showDialog(
+          'Bildirimin eklendi',
+          type === 'accident'
+            ? 'Kaza işareti 3 saat boyunca görünür olacak.'
+            : 'Yol çalışması işareti 12 saat boyunca görünür olacak.',
+        ),
+      )
+      .catch(() =>
+        showDialog('Bildirim gönderilemedi', 'Bağlantını kontrol edip tekrar dene.'),
+      );
+  }
+  function showTrafficReportDetails(report: TrafficReport) {
+    setSelectedTrafficReport(report);
+  }
+  function removeTrafficReport(report: TrafficReport) {
+    setSelectedTrafficReport(null);
+    if (report.id.startsWith('demo-')) {
+      setDismissedDemoReportIds(current => [...current, report.id]);
+      showDialog('Demo bildirimi kaldırıldı');
+      return;
+    }
+    deleteTrafficReport(report)
+      .then(() => showDialog('Bildirim kaldırıldı'))
+      .catch(error =>
+        showDialog('Bildirim kaldırılamadı', trafficReportErrorMessage(error)),
+      );
   }
   function endNavigationAndSearch() {
     stopNavigation();
@@ -1078,6 +1224,7 @@ export function MapScreen() {
   }
   function startDemoDrive(option: RouteOption) {
     if (option.summary.length <= 0) return;
+    setDismissedDemoReportIds([]);
     startNavigationBackgroundService(
       option.coordinates,
       option.instructions,
@@ -1276,6 +1423,8 @@ export function MapScreen() {
         tomTomApiKey={TOMTOM_API_KEY}
         navigationIndicator={navigationIndicator}
         navigationIndicatorRotation={navigationIndicatorRotation}
+        trafficReports={displayedTrafficReports}
+        onTrafficReportPress={showTrafficReportDetails}
         onMapPress={event => {
           selectMapPlace(event).catch(() => undefined);
         }}
@@ -1333,9 +1482,22 @@ export function MapScreen() {
           <RoadStatus
             activeSpeedKmh={activeSpeedKmh}
             speedLimit={currentSpeedLimit}
+            isSpeeding={isSpeeding}
             traffic={currentTraffic}
             top={insets.top + 142}
           />
+        )}
+        {isNavigating && !hasArrived && (
+          <Pressable
+            accessibilityLabel="Yol durumu bildir"
+            style={[
+              styles.quickReportButton,
+              { top: insets.top + 126, left: 22 },
+            ]}
+            onPress={showTrafficReportOptions}
+          >
+            <MaterialIcons name="add-alert" size={21} color={colors.white} />
+          </Pressable>
         )}
         {!isSearchOpen && (
           <View
@@ -1510,6 +1672,192 @@ export function MapScreen() {
           setIsIndicatorPickerOpen(false);
         }}
       />
+      <Modal
+        visible={isNavigationSettingsOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsNavigationSettingsOpen(false)}
+      >
+        <View style={styles.bottomSheetBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsNavigationSettingsOpen(false)}
+          />
+          <View style={styles.trafficSheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.modalTitleRow}>
+              <View style={styles.modalTitleIcon}>
+                <MaterialIcons name="error-outline" size={18} color={colors.primary} />
+              </View>
+              <Text style={styles.trafficSheetTitle}>Navigasyon ayarları</Text>
+            </View>
+            <Text style={styles.trafficSheetHint}>
+              Sürüş sırasında kullanılacak tercihleri düzenle.
+            </Text>
+            <Pressable
+              style={styles.settingsRow}
+              onPress={() => {
+                setIsNavigationSettingsOpen(false);
+                setIsIndicatorPickerOpen(true);
+              }}
+            >
+              <View style={styles.settingsIcon}>
+                <MaterialIcons name="navigation" size={22} color={colors.white} />
+              </View>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Ok göstergesi</Text>
+                <Text style={styles.settingsSubtitle}>Araç veya ok görünümünü seç</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={25} color={colors.textMuted} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: isSpeedAlertEnabled }}
+              style={styles.settingsRow}
+              onPress={() => setIsSpeedAlertEnabled(current => !current)}
+            >
+              <View style={styles.settingsIcon}>
+                <MaterialIcons name="speed" size={22} color={colors.white} />
+              </View>
+              <View style={styles.settingsCopy}>
+                <Text style={styles.settingsTitle}>Hız uyarısı</Text>
+                <Text style={styles.settingsSubtitle}>
+                  Hız limitini aştığında titreşim ve sesli uyarı
+                </Text>
+              </View>
+              <View style={[styles.settingsSwitch, isSpeedAlertEnabled && styles.settingsSwitchActive]}>
+                <View style={[styles.settingsSwitchThumb, isSpeedAlertEnabled && styles.settingsSwitchThumbActive]} />
+              </View>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={isTrafficReportPickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsTrafficReportPickerOpen(false)}
+      >
+        <View style={styles.bottomSheetBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsTrafficReportPickerOpen(false)}
+          />
+          <View style={styles.trafficSheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.modalTitleRow}>
+              <View style={styles.modalTitleIcon}>
+                <MaterialIcons name="error-outline" size={18} color={colors.primary} />
+              </View>
+              <Text style={styles.trafficSheetTitle}>Yol durumu bildir</Text>
+            </View>
+            <Text style={styles.trafficSheetHint}>
+              Mevcut konumun için bildirim oluştur.
+            </Text>
+            <View style={styles.reportTypeRow}>
+              <Pressable
+                style={[styles.reportTypeButton, styles.accidentReportButton]}
+                onPress={() => openTrafficReportComposer('accident')}
+              >
+                <MaterialIcons name="car-crash" size={30} color={colors.white} />
+                <Text style={styles.reportTypeButtonText}>Kaza</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.reportTypeButton, styles.roadworkReportButton]}
+                onPress={() => openTrafficReportComposer('roadwork')}
+              >
+                <MaterialIcons name="construction" size={30} color={colors.white} />
+                <Text style={styles.reportTypeButtonText}>Çalışma</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={selectedTrafficReport !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedTrafficReport(null)}
+      >
+        <View style={styles.bottomSheetBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedTrafficReport(null)}
+          />
+          {selectedTrafficReport && (
+            <View style={styles.trafficSheet}>
+              <View style={styles.sheetHandle} />
+              <View style={styles.reportDetailHeader}>
+                <View style={styles.modalTitleIcon}>
+                  <MaterialIcons
+                    name="error-outline"
+                    size={18}
+                    color={colors.primary}
+                  />
+                </View>
+                <View>
+                  <Text style={styles.trafficSheetTitle}>
+                    {selectedTrafficReport.type === 'accident' ? 'Kaza bildirimi' : 'Yol çalışması'}
+                  </Text>
+                  <Text style={styles.trafficSheetHint}>Sürücü açıklaması</Text>
+                </View>
+              </View>
+              <Text style={styles.reportDescription}>
+                {selectedTrafficReport.description || 'Bu bildirim için açıklama eklenmemiş.'}
+              </Text>
+              <Pressable
+                style={styles.removeReportButton}
+                onPress={() => removeTrafficReport(selectedTrafficReport)}
+              >
+                <MaterialIcons name="delete-outline" size={20} color="#FFB7B0" />
+                <Text style={styles.removeReportButtonText}>Yol açıldı · bildirimi kaldır</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </Modal>
+      <Modal
+        visible={trafficReportType !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTrafficReportType(null)}
+      >
+        <View style={styles.reportComposerBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setTrafficReportType(null)}
+          />
+          <View style={styles.reportComposer}>
+            <View style={styles.modalTitleRow}>
+              <View style={styles.modalTitleIcon}>
+                <MaterialIcons name="error-outline" size={18} color={colors.primary} />
+              </View>
+              <Text style={styles.reportComposerTitle}>
+                {trafficReportType === 'accident' ? 'Kaza bildir' : 'Yol çalışması bildir'}
+              </Text>
+            </View>
+            <Text style={styles.reportComposerHint}>
+              Diğer sürücülere yardımcı olacak kısa bir açıklama yaz.
+            </Text>
+            <TextInput
+              autoFocus
+              value={trafficReportDescription}
+              onChangeText={setTrafficReportDescription}
+              placeholder="Örn. Sağ şerit kapalı"
+              placeholderTextColor={colors.textMuted}
+              maxLength={280}
+              multiline
+              style={styles.reportComposerInput}
+            />
+            <Pressable style={styles.reportComposerSubmit} onPress={submitTrafficReport}>
+              <Text style={styles.reportComposerSubmitText}>Bildirimi gönder</Text>
+            </Pressable>
+            <Pressable onPress={() => setTrafficReportType(null)}>
+              <Text style={styles.reportComposerCancel}>Vazgeç</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
       <AppDialog
         visible={Boolean(dialog)}
         title={dialog?.title ?? ''}
@@ -1577,9 +1925,14 @@ function NavigationIndicatorPicker({
       <View style={styles.indicatorModalBackdrop}>
         <Pressable style={styles.indicatorModalDismiss} onPress={onClose} />
         <View style={styles.indicatorPicker}>
-          <View style={styles.handle} />
+          <View style={styles.sheetHandle} />
           <View style={styles.indicatorPickerHeader}>
-            <Text style={styles.indicatorPickerTitle}>Ok göstergesi</Text>
+            <View style={styles.modalTitleRow}>
+              <View style={styles.modalTitleIcon}>
+                <MaterialIcons name="error-outline" size={18} color={colors.primary} />
+              </View>
+              <Text style={styles.indicatorPickerTitle}>Ok göstergesi</Text>
+            </View>
             <Pressable
               accessibilityLabel="Ok göstergesi seçicisini kapat"
               style={styles.indicatorPickerClose}
@@ -1599,7 +1952,10 @@ function NavigationIndicatorPicker({
                   key={option.id}
                   accessibilityRole="radio"
                   accessibilityState={{ checked: isSelected }}
-                  style={styles.indicatorOption}
+                  style={[
+                    styles.indicatorOption,
+                    isSelected && styles.indicatorOptionSelected,
+                  ]}
                   onPress={() => onSelect(option.id)}
                 >
                   <IndicatorOptionVisual
@@ -1610,7 +1966,7 @@ function NavigationIndicatorPicker({
                   {isSelected && (
                     <MaterialIcons
                       name="check"
-                      size={31}
+                    size={22}
                       color={colors.primary}
                     />
                   )}
@@ -2605,11 +2961,13 @@ function ManeuverCard({
 function RoadStatus({
   activeSpeedKmh,
   speedLimit,
+  isSpeeding,
   traffic,
   top,
 }: {
   activeSpeedKmh: number | null;
   speedLimit?: number;
+  isSpeeding: boolean;
   traffic?: RouteTrafficSection;
   top: number;
 }) {
@@ -2631,7 +2989,9 @@ function RoadStatus({
   return (
     <View style={[styles.roadStatus, { top }]}>
       {activeSpeedKmh !== null && (
-        <View style={styles.currentSpeedBadge}>
+        <View
+          style={[styles.currentSpeedBadge, isSpeeding && styles.currentSpeedBadgeWarning]}
+        >
           <Text style={styles.currentSpeedValue}>
             {Math.round(activeSpeedKmh)}
           </Text>
@@ -2661,6 +3021,203 @@ function RoadStatus({
 }
 
 const styles = StyleSheet.create({
+  bottomSheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: '#00000080',
+  },
+  trafficSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#FFFFFF16',
+    backgroundColor: '#151A24',
+    padding: 22,
+    paddingBottom: 36,
+  },
+  sheetHandle: {
+    width: 38,
+    height: 4,
+    alignSelf: 'center',
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF3D',
+    marginBottom: 16,
+  },
+  trafficSheetTitle: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  modalTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  modalTitleIcon: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    backgroundColor: '#1D356A',
+  },
+  trafficSheetHint: {
+    color: colors.textMuted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  reportTypeRow: { flexDirection: 'row', gap: 12, marginTop: 18 },
+  reportTypeButton: {
+    flex: 1,
+    minHeight: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FFFFFF24',
+    borderRadius: 20,
+    gap: 10,
+  },
+  accidentReportButton: { backgroundColor: '#7F1D1D' },
+  roadworkReportButton: { backgroundColor: '#7A4B08' },
+  reportTypeButtonText: { color: colors.white, fontSize: 16, fontWeight: '800' },
+  reportDetailHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  reportDetailIcon: {
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+  },
+  reportDescription: {
+    color: colors.white,
+    fontSize: 16,
+    lineHeight: 23,
+    marginTop: 22,
+  },
+  removeReportButton: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 24,
+    borderRadius: radii.control,
+    borderWidth: 1,
+    borderColor: '#FFB7B038',
+    backgroundColor: '#3D2226',
+  },
+  removeReportButtonText: { color: '#FFB7B0', fontSize: 15, fontWeight: '800' },
+  quickReportButton: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FFFFFF24',
+    borderRadius: 15,
+    backgroundColor: '#9F1F1A',
+    elevation: 6,
+  },
+  settingsRow: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FFFFFF12',
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF0B',
+  },
+  settingsIcon: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: '#244EAB',
+  },
+  settingsCopy: { flex: 1 },
+  settingsTitle: { color: colors.white, fontSize: 16, fontWeight: '800' },
+  settingsSubtitle: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  settingsSwitch: {
+    width: 46,
+    height: 27,
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderRadius: 14,
+    backgroundColor: '#5D616A',
+  },
+  settingsSwitchActive: { backgroundColor: colors.primary },
+  settingsSwitchThumb: {
+    width: 21,
+    height: 21,
+    borderRadius: 11,
+    backgroundColor: colors.white,
+  },
+  settingsSwitchThumbActive: { alignSelf: 'flex-end' },
+  reportComposerBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: '#000000A8',
+  },
+  reportComposer: {
+    borderWidth: 1,
+    borderColor: '#FFFFFF16',
+    borderRadius: radii.sheet,
+    backgroundColor: '#151A24',
+    padding: 24,
+  },
+  reportComposerTitle: {
+    color: colors.white,
+    fontSize: 21,
+    fontWeight: '800',
+  },
+  reportComposerHint: {
+    color: colors.textMuted,
+    fontSize: 15,
+    lineHeight: 21,
+    marginTop: 8,
+  },
+  reportComposerInput: {
+    minHeight: 104,
+    marginTop: 18,
+    borderRadius: radii.control,
+    borderWidth: 1,
+    borderColor: '#FFFFFF20',
+    backgroundColor: colors.surfaceElevated,
+    color: colors.white,
+    fontSize: 16,
+    padding: 14,
+    textAlignVertical: 'top',
+  },
+  reportComposerSubmit: {
+    minHeight: 48,
+    marginTop: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.control,
+    backgroundColor: colors.primary,
+  },
+  reportComposerSubmitText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  reportComposerCancel: {
+    paddingVertical: 16,
+    color: colors.textMuted,
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   screen: { flex: 1, backgroundColor: colors.background },
   overlay: { ...StyleSheet.absoluteFill, justifyContent: 'flex-end' },
   tools: {
@@ -2680,19 +3237,19 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   speedLimitBadge: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 5,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 4,
     borderColor: '#FF565A',
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
   },
   currentSpeedBadge: {
-    minWidth: 62,
-    minHeight: 62,
-    borderRadius: 31,
+    minWidth: 54,
+    minHeight: 54,
+    borderRadius: 27,
     borderWidth: 3,
     borderColor: '#FFFFFF',
     backgroundColor: '#17191D',
@@ -2700,14 +3257,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 8,
   },
-  currentSpeedValue: { color: colors.white, fontSize: 24, fontWeight: '900' },
+  currentSpeedBadgeWarning: { backgroundColor: '#B42318', borderColor: '#FFD7D4' },
+  currentSpeedValue: { color: colors.white, fontSize: 21, fontWeight: '900' },
   currentSpeedUnit: {
     color: '#BFC5CF',
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 0.4,
   },
-  speedLimitValue: { color: '#17191D', fontSize: 22, fontWeight: '900' },
+  speedLimitValue: { color: '#17191D', fontSize: 19, fontWeight: '900' },
   speedLimitUnit: { color: '#5D6470', fontSize: 9, fontWeight: '800' },
   trafficBadge: {
     maxWidth: 190,
@@ -2758,8 +3316,8 @@ const styles = StyleSheet.create({
   maneuverCard: {
     position: 'absolute',
     left: 22,
-    width: 244,
-    padding: 13,
+    width: 216,
+    padding: 10,
     backgroundColor: '#1667FF',
     borderRadius: 18,
     shadowColor: '#000000',
@@ -2770,28 +3328,28 @@ const styles = StyleSheet.create({
   walkingManeuverCard: { backgroundColor: '#0E8062' },
   maneuverPrimaryRow: { flexDirection: 'row', alignItems: 'center' },
   maneuverIconSurface: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 11,
+    marginRight: 9,
   },
   maneuverCopy: { flex: 1, minWidth: 0 },
-  maneuverDistance: { fontSize: 17, color: colors.white, fontWeight: '900' },
+  maneuverDistance: { fontSize: 15, color: colors.white, fontWeight: '900' },
   maneuverMessage: {
     color: '#E9F0FF',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
   },
   maneuverStreet: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#D9E5FF',
     fontWeight: '700',
-    marginTop: 9,
-    marginLeft: 57,
+    marginTop: 6,
+    marginLeft: 47,
   },
   homePanel: {
     backgroundColor: colors.surface,
@@ -3184,11 +3742,13 @@ const styles = StyleSheet.create({
   delayText: { color: '#FFB4A7', fontSize: 10, fontWeight: '700' },
   delayTextSelected: { color: '#FFE0D9' },
   navigationPanel: {
-    margin: 14,
-    borderRadius: 24,
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 10,
+    borderRadius: 20,
     backgroundColor: '#17191D',
-    paddingVertical: 16,
-    paddingHorizontal: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
   },
   walkingNavigationPanel: { backgroundColor: '#075741' },
   navigationHeader: {
@@ -3221,32 +3781,32 @@ const styles = StyleSheet.create({
   },
   etaValue: {
     color: colors.white,
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '900',
     letterSpacing: -0.6,
     marginTop: 1,
   },
   navigationMenuButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+    width: 40,
+    height: 40,
+    borderRadius: 13,
     backgroundColor: colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
   routeChangeControl: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+    width: 40,
+    height: 40,
+    borderRadius: 13,
     backgroundColor: colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
   },
   voiceControl: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+    width: 40,
+    height: 40,
+    borderRadius: 13,
     backgroundColor: colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
@@ -3256,9 +3816,9 @@ const styles = StyleSheet.create({
   navigationMetrics: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 11,
+    marginTop: 7,
   },
-  navMetric: { color: colors.white, fontWeight: '800', fontSize: 17 },
+  navMetric: { color: colors.white, fontWeight: '800', fontSize: 15 },
   metricDivider: {
     width: 4,
     height: 4,
@@ -3270,13 +3830,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 8,
-    marginTop: 12,
+    marginTop: 7,
   },
   progressLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
   progressTrack: {
     position: 'relative',
     height: 6,
-    marginTop: 6,
+    marginTop: 4,
     borderRadius: 3,
     overflow: 'hidden',
     backgroundColor: '#1667FF',
@@ -3392,44 +3952,50 @@ const styles = StyleSheet.create({
   },
   indicatorModalDismiss: { ...StyleSheet.absoluteFill },
   indicatorPicker: {
-    maxHeight: '74%',
-    minHeight: 480,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    backgroundColor: '#202327',
+    maxHeight: '78%',
+    minHeight: 440,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#FFFFFF16',
+    backgroundColor: '#151A24',
     paddingHorizontal: 22,
-    paddingBottom: 28,
+    paddingBottom: 32,
   },
   indicatorPickerHeader: {
-    minHeight: 76,
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
-  indicatorPickerTitle: { color: colors.white, fontSize: 26, fontWeight: '800' },
+  indicatorPickerTitle: { color: colors.white, fontSize: 18, fontWeight: '800' },
   indicatorPickerClose: {
-    position: 'absolute',
-    right: 0,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#3C4149',
+    backgroundColor: '#FFFFFF12',
   },
   indicatorPickerSubtitle: {
     color: colors.textMuted,
     fontSize: 14,
-    marginBottom: 10,
+    marginBottom: 14,
   },
   indicatorOption: {
-    minHeight: 72,
+    minHeight: 66,
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#343940',
-    gap: 14,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#FFFFFF12',
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF0B',
+    gap: 12,
   },
-  indicatorVehiclePreview: { width: 58, height: 58, resizeMode: 'contain' },
-  indicatorOptionText: { flex: 1, color: colors.white, fontSize: 19 },
+  indicatorOptionSelected: { borderColor: '#4D82FF', backgroundColor: '#2168F426' },
+  indicatorVehiclePreview: { width: 48, height: 48, resizeMode: 'contain' },
+  indicatorOptionText: { flex: 1, color: colors.white, fontSize: 16, fontWeight: '700' },
 });

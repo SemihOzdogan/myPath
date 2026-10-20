@@ -152,6 +152,24 @@ export async function speakNavigationArrival() {
   }
 }
 
+export async function speakSpeedLimitWarning() {
+  if (usesAndroidNavigationService()) return;
+  if (!isSpeechEnabled) return;
+  const generation = speechGeneration;
+  try {
+    const nativeSpeech = speakNativeNavigation('Hız sınırını aştınız.');
+    if (nativeSpeech) {
+      await nativeSpeech;
+      return;
+    }
+    await initializeSpeech();
+    if (!isSpeechEnabled || generation !== speechGeneration) return;
+    Tts.speak('Hız sınırını aştınız.');
+  } catch {
+    // Ses motoru cihazda kullanılamıyor olabilir.
+  }
+}
+
 export function stopNavigationSpeech() {
   isSpeechEnabled = false;
   speechGeneration += 1;

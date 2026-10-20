@@ -27,10 +27,12 @@ export function AppDialog({ visible, title, message, actions, onDismiss }: Props
       <View style={styles.backdrop}>
         <Pressable style={styles.dismissArea} onPress={onDismiss} />
         <View accessibilityViewIsModal style={styles.dialog}>
-          <View style={styles.iconWrap}>
-            <MaterialIcons name="info-outline" size={27} color={colors.primary} />
+          <View style={styles.titleRow}>
+            <View style={styles.iconWrap}>
+              <MaterialIcons name="error-outline" size={19} color={colors.primary} />
+            </View>
+            <Text accessibilityRole="header" style={styles.title}>{title}</Text>
           </View>
-          <Text accessibilityRole="header" style={styles.title}>{title}</Text>
           {message ? <Text style={styles.message}>{message}</Text> : null}
           <View style={styles.actions}>
             {actions.map(action => (
@@ -52,12 +54,13 @@ export function AppDialog({ visible, title, message, actions, onDismiss }: Props
 const styles = StyleSheet.create({
   backdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000000A8', padding: 24 },
   dismissArea: { ...StyleSheet.absoluteFill },
-  dialog: { width: '100%', maxWidth: 380, borderRadius: radii.sheet, backgroundColor: colors.surface, padding: 24 },
-  iconWrap: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 24, backgroundColor: '#203B76' },
-  title: { color: colors.white, fontSize: 21, fontWeight: '800', marginTop: 16 },
+  dialog: { width: '100%', maxWidth: 380, borderWidth: 1, borderColor: '#FFFFFF16', borderRadius: radii.sheet, backgroundColor: '#151A24', padding: 22 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  iconWrap: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#1D356A' },
+  title: { flex: 1, color: colors.white, fontSize: 18, fontWeight: '800' },
   message: { color: colors.textMuted, fontSize: 15, lineHeight: 21, marginTop: 8 },
   actions: { gap: 10, marginTop: 24 },
-  action: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radii.control, backgroundColor: colors.primary, paddingHorizontal: 16 },
+  action: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radii.control, backgroundColor: '#2168F4', paddingHorizontal: 16 },
   dangerAction: { backgroundColor: '#512425' },
   cancelAction: { backgroundColor: colors.surfaceElevated },
   actionText: { color: colors.white, fontSize: 16, fontWeight: '800' },
